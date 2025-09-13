@@ -9,15 +9,64 @@ from rapidfuzz import fuzz, process
 st.set_page_config(page_title="AI KPI System", layout="wide")
 st.title("AI KPI Extraction & Recommendations (Per BRD)")
 
+# ---------------- Custom CSS ----------------
+st.markdown(
+    """
+    <style>
+    /* ====== Input Boxes ====== */
+    .stTextInput>div>div>input {
+        border: 1.5px solid #b91c1c;
+        border-radius: 6px;
+        padding: 6px 8px;
+    }
+    .stTextInput>div>div>input:focus {
+        border: 2px solid #b91c1c !important;
+        outline: none !important;
+        box-shadow: 0 0 5px #b91c1c;
+    }
+
+    /* ====== Buttons ====== */
+    div.stButton > button {
+        border: 1.5px solid #b91c1c;
+        background-color: white;
+        color: #b91c1c;
+        padding: 6px 14px;
+        border-radius: 6px;
+        font-weight: 600;
+        cursor: pointer;
+    }
+    div.stButton > button:hover {
+        background-color: #b91c1c;
+        color: white;
+    }
+
+    /* Validate button clicked */
+    div.stButton > button[data-testid="validate-true"] {
+        background-color: #16a34a !important;
+        color: white !important;
+        border: 1.5px solid #16a34a !important;
+    }
+
+    /* Reject button clicked */
+    div.stButton > button[data-testid="reject-true"] {
+        background-color: #7f1d1d !important;
+        color: white !important;
+        border: 1.5px solid #7f1d1d !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 # ---------------- Init ----------------
 if "projects" not in st.session_state:
-    st.session_state["projects"] = {}   # {file_name: {domain, extracted_df, recommended_df}}
+    st.session_state["projects"] = {}
 
 # ---------------- Colors ----------------
 STATUS_COLORS = {
     "Extracted": "#b91c1c",   # red
     "Recommended": "#9ca3af", # gray
-    "Validated": "#e11d48",   # lighter red
+    "Validated": "#16a34a",   # green
     "Rejected": "#7f1d1d",    # dark red
 }
 
@@ -90,7 +139,7 @@ def extract_kpis(text: str) -> pd.DataFrame:
         rows.append({"KPI Name": name, "Description": desc, "Target Value": target, "Status": "Extracted"})
     return pd.DataFrame(rows)
 
-# ---------------- Recommendations (Fallback Only) ----------------
+# ---------------- Recommendations ----------------
 FALLBACK_KPIS = {
     "hr": ["Offer Acceptance Rate","Absenteeism Rate","Training Completion Rate","Employee NPS"],
     "sales": ["Win Rate","Lead Conversion","Quota Attainment","Average Deal Size"],
@@ -128,12 +177,18 @@ def render_editable_table(df: pd.DataFrame, editable_cols: list, key_prefix: str
             if col in editable_cols:
                 row_data[col] = cols[j].text_input("", value=val, key=f"{key_prefix}_{i}_{col}")
             elif col == "Status":
-                if cols[j].button("Validate", key=f"{key_prefix}_val_{i}"):
+                validate = cols[j].button("Validate", key=f"{key_prefix}_val_{i}")
+                reject = cols[j].button("Reject", key=f"{key_prefix}_rej_{i}")
+
+                if validate:
                     row_data[col] = "Validated"
-                elif cols[j].button("Reject", key=f"{key_prefix}_rej_{i}"):
+                    st.session_state[f"{key_prefix}_val_state_{i}"] = True
+                elif reject:
                     row_data[col] = "Rejected"
+                    st.session_state[f"{key_prefix}_rej_state_{i}"] = True
                 else:
                     row_data[col] = val
+
                 cols[j].markdown(status_chip(row_data[col]), unsafe_allow_html=True)
             else:
                 cols[j].write(val if val else "—")
