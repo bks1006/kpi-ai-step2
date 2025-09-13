@@ -263,69 +263,111 @@ st.markdown("---")
 
 # ---------------- UI: Preview Extracted ----------------
 st.subheader("Preview Extracted KPIs")
-if st.session_state.extracted_df.empty:
+
+df = st.session_state.extracted_df
+if df.empty:
     st.caption("No extracted KPIs yet.")
 else:
+    # Dark header bar
     st.markdown(
-        """<div style="display:grid;grid-template-columns:1.5fr 2.4fr 0.9fr 0.7fr 0.7fr;
-        padding:8px 12px;background:#f5f6f7;border:1px solid #e5e7eb;font-weight:600">
-        <div>KPI Name</div><div>Description</div><div>Target Value</div><div>Status</div><div>Actions</div></div>""",
+        """
+        <div style="
+            display:grid;
+            grid-template-columns:1.6fr 2.6fr 1fr 0.8fr 0.8fr;
+            padding:10px 14px;
+            background:#1e1e1e;
+            border:1px solid #333;
+            border-radius:8px 8px 0 0;
+            font-weight:600;
+            color:#fff;">
+            <div>KPI Name</div>
+            <div>Description</div>
+            <div>Target Value</div>
+            <div>Status</div>
+            <div>Actions</div>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
-    df = st.session_state.extracted_df
+
+    # Rows (custom-rendered)
     for i, row in df.iterrows():
-        c1,c2,c3,c4,c5 = st.columns([1.5,2.4,0.9,0.7,0.7])
+        c1, c2, c3, c4, c5 = st.columns([1.6, 2.6, 1.0, 0.8, 0.8])
         c1.write(row["KPI Name"])
         c2.write(row["Description"])
         c3.write(row["Target Value"] or "—")
         c4.markdown(status_chip(row["Status"]), unsafe_allow_html=True)
+
         if c5.button("Review", key=f"ext_rev_{i}"):
             st.session_state["ext_idx"] = i
             st.session_state["ext_open"] = True
 
+    # Inline editor
     if st.session_state.get("ext_open"):
         i = st.session_state.get("ext_idx", 0)
         with st.expander(f"Review: {df.loc[i,'KPI Name']}", expanded=True):
-            n = st.text_input("KPI Name", value=df.loc[i,"KPI Name"])
-            d = st.text_area("Description", value=df.loc[i,"Description"])
-            t = st.text_input("Target Value", value=df.loc[i,"Target Value"])
+            n = st.text_input("KPI Name", value=df.loc[i, "KPI Name"])
+            d = st.text_area("Description", value=df.loc[i, "Description"])
+            t = st.text_input("Target Value", value=df.loc[i, "Target Value"])
             if st.button("Apply changes", key="apply_ext"):
-                df.loc[i,"KPI Name"] = n.strip()
-                df.loc[i,"Description"] = d.strip()
-                df.loc[i,"Target Value"] = t.strip()
+                df.loc[i, "KPI Name"] = n.strip()
+                df.loc[i, "Description"] = d.strip()
+                df.loc[i, "Target Value"] = t.strip()
                 st.toast("Updated")
+
 st.markdown("---")
 
 # ---------------- UI: Recommendations ----------------
 st.subheader("Recommended & Extracted (for review)")
 low_df = st.session_state.recommended_df
+
 if low_df.empty:
     st.caption("No recommendations yet.")
 else:
+    # Dark header bar
     st.markdown(
-        """<div style="display:grid;grid-template-columns:1.6fr 1fr 0.9fr 0.7fr 1fr 0.7fr;
-        padding:8px 12px;background:#f5f6f7;border:1px solid #e5e7eb;font-weight:600">
-        <div>KPI Name</div><div>Owner/ SME</div><div>Target Value</div><div>Status</div><div>Actions</div><div></div></div>""",
+        """
+        <div style="
+            display:grid;
+            grid-template-columns:1.7fr 1.1fr 1.0fr 0.8fr 1.1fr 0.8fr;
+            padding:10px 14px;
+            background:#1e1e1e;
+            border:1px solid #333;
+            border-radius:8px 8px 0 0;
+            font-weight:600;
+            color:#fff;">
+            <div>KPI Name</div>
+            <div>Owner/ SME</div>
+            <div>Target Value</div>
+            <div>Status</div>
+            <div>Actions</div>
+            <div></div>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
+
+    # Rows
     for i, row in low_df.iterrows():
-        c1,c2,c3,c4,c5,c6 = st.columns([1.6,1.0,0.9,0.7,1.0,0.7])
+        c1, c2, c3, c4, c5, c6 = st.columns([1.7, 1.1, 1.0, 0.8, 1.1, 0.8])
         c1.write(row["KPI Name"])
+
         owner = c2.text_input("Owner", value=row["Owner/ SME"], key=f"own_{i}")
         target = c3.text_input("Target", value=row["Target Value"], key=f"targ_{i}")
         c4.markdown(status_chip(row["Status"]), unsafe_allow_html=True)
+
         review = c5.button("Review Details", key=f"rec_rev_{i}")
         validate = c6.button("Validate", key=f"val_{i}")
         reject = c6.button("Reject", key=f"rej_{i}")
 
         # persist edits
-        low_df.loc[i,"Owner/ SME"] = owner
-        low_df.loc[i,"Target Value"] = target
+        low_df.loc[i, "Owner/ SME"] = owner
+        low_df.loc[i, "Target Value"] = target
 
         if validate:
-            low_df.loc[i,"Status"] = "Validated"; st.toast("Validated")
+            low_df.loc[i, "Status"] = "Validated"; st.toast("Validated")
         if reject:
-            low_df.loc[i,"Status"] = "Rejected"; st.toast("Rejected")
+            low_df.loc[i, "Status"] = "Rejected"; st.toast("Rejected")
         if review:
             st.session_state["rec_idx"] = i
             st.session_state["rec_open"] = True
@@ -333,9 +375,9 @@ else:
     if st.session_state.get("rec_open"):
         i = st.session_state.get("rec_idx", 0)
         with st.expander(f"Review Details — {low_df.loc[i,'KPI Name']}", expanded=True):
-            st.write(low_df.loc[i].to_frame().rename(columns={i:"Value"}))
+            st.write(low_df.loc[i].to_frame().rename(columns={i: "Value"}))
 
-    _, rcol = st.columns([5,1.3])
+    _, rcol = st.columns([5, 1.3])
     with rcol:
         if st.button("Validate All"):
             low_df["Status"] = "Validated"
