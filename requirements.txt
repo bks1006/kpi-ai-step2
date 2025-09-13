@@ -1,8 +1,8 @@
 streamlit
 pandas
-python-docx
 pypdf
+python-docx
 rapidfuzz
 pdf2image
-pillow
 pytesseract
+Pillow
