@@ -1,4 +1,4 @@
-import io, re
+import io, re, subprocess
 import pandas as pd
 import streamlit as st
 
@@ -6,7 +6,7 @@ from pypdf import PdfReader
 from docx import Document as DocxDocument
 from rapidfuzz import fuzz, process
 
-# OCR / image fallback (optional but recommended)
+# OCR fallback
 try:
     from pdf2image import convert_from_bytes
     import pytesseract
@@ -42,7 +42,7 @@ st.markdown(
 
 # ---------------- Session ----------------
 if "projects" not in st.session_state:
-    st.session_state["projects"] = {}
+    st.session_state["projects"] = {}   # {file_name: {domain, topic, extracted, recommended}}
 
 # ---------------- Chips ----------------
 STATUS_COLORS = {"Validated": "#16a34a", "Rejected": "#7f1d1d", "Pending": "#9ca3af"}
@@ -57,6 +57,7 @@ def read_text_from_bytes(data: bytes, name: str) -> str:
     bio = io.BytesIO(data)
 
     if lname.endswith(".pdf"):
+        # Try native text
         try:
             reader = PdfReader(bio)
             native_text = "\n".join((p.extract_text() or "") for p in reader.pages)
@@ -64,6 +65,8 @@ def read_text_from_bytes(data: bytes, name: str) -> str:
                 return native_text
         except Exception:
             pass
+
+        # OCR fallback
         if OCR_AVAILABLE:
             try:
                 pages = convert_from_bytes(data)
@@ -83,18 +86,19 @@ def read_text_from_bytes(data: bytes, name: str) -> str:
         except Exception:
             return ""
         blocks = []
+        # paragraphs
         for p in doc.paragraphs:
             t = (p.text or "").strip()
-            if t:
-                blocks.append(t)
+            if t: blocks.append(t)
+        # tables
         for tbl in doc.tables:
             for row in tbl.rows:
                 for cell in row.cells:
                     t = (cell.text or "").strip()
-                    if t:
-                        blocks.append(t)
+                    if t: blocks.append(t)
         return "\n".join(blocks)
 
+    # txt / fallback
     try:
         return data.decode(errors="ignore")
     except Exception:
@@ -103,7 +107,7 @@ def read_text_from_bytes(data: bytes, name: str) -> str:
 def read_uploaded(file) -> str:
     return read_text_from_bytes(file.read(), file.name)
 
-# ---------------- Domain & Topic ----------------
+# ---------------- Domain & HR Topic ----------------
 DOMAIN_HINTS = {
     "hr": [
         "employee","attrition","turnover","recruitment","hiring","retention",
@@ -160,87 +164,73 @@ def preprocess_text(raw: str) -> str:
             if s: parts.append(s)
     return "\n".join(parts)
 
-# ---------------- KPI rules ----------------
+# ---------------- KPI detection rules ----------------
+# Targets
 TARGET_PERCENT = r"\b(?:<|>|≤|≥)?\s*\d{1,3}(?:\.\d+)?\s*%\b"
 TARGET_RATIO   = r"\b\d+(?:\.\d+)?\s*/\s*\d+\b"
 TARGET_TIME    = r"\b(?:in|within|by)\s+\d+\s*(?:days?|weeks?|months?|quarters?|years?)\b"
+TARGET_SECS    = r"\b\d+(?:\.\d+)?\s*(?:ms|milliseconds|s|sec|secs|seconds)\b"
+TARGET_UNDER_SECS = r"\b(?:under|within|less than|<|≤)\s*\d+(?:\.\d+)?\s*(?:ms|milliseconds|s|sec|secs|seconds)\b"
 TARGET_GENERIC = r"(?:<|>|≤|≥)\s*\d+(?:\.\d+)?"
+
 def find_targets(s: str) -> str:
     hits = []
-    for pat in (TARGET_PERCENT, TARGET_RATIO, TARGET_TIME, TARGET_GENERIC):
+    for pat in (TARGET_PERCENT, TARGET_RATIO, TARGET_TIME, TARGET_UNDER_SECS, TARGET_SECS, TARGET_GENERIC):
         for m in re.finditer(pat, s, flags=re.I):
             hits.append(m.group(0).strip())
-    seen, out = set(), []
-    for h in hits:
-        if h not in seen:
-            out.append(h); seen.add(h)
-    return " | ".join(out)
+    # de-dup preserve order
+    return " | ".join(dict.fromkeys(hits))
 
-# Canonical KPI names and aliases (used to normalize names)
+# Canonical KPI dictionary (aliases → canonical names)
 KPI_CANON = {
-    # Attrition / retention
+    # JD/ATS & platform
+    "JD Generation Time": [
+        r"\bgenerate\b.{0,40}\bjd\b.{0,40}\b(sec|seconds|ms|milliseconds|time|latency)\b",
+        r"\bjd (generation|creation) time\b"
+    ],
+    "Bias Flag Rate": [
+        r"\bbias (flag|detection) rate\b", r"\bnon[- ]inclusive language\b"
+    ],
+    "JD Tool Adoption Rate": [
+        r"\badoption rate\b", r"\busage rate\b", r"\b% of (hiring managers|users) using\b"
+    ],
+    "JD Approval Rate": [
+        r"\bapproval rate\b", r"\bapproved without major edits\b"
+    ],
+    "Repository Compliance": [
+        r"\bversion control\b", r"\bapproval logs\b", r"\brepository compliance\b"
+    ],
+    "System Uptime": [r"\buptime\b", r"\bavailability\b"],
+    "Concurrent Users Supported": [r"\bconcurrent users\b"],
+
+    # Core HR
     "Voluntary Attrition Rate": [r"\bvoluntary attrition\b", r"\bvoluntary turnover\b"],
     "Involuntary Attrition Rate": [r"\binvoluntary attrition\b", r"\binvoluntary turnover\b"],
     "Employee Retention Rate": [r"\bretention rate\b", r"\bemployee retention\b"],
     "First Year Attrition Rate": [r"\bfirst[- ]year attrition\b"],
     "Average Tenure": [r"\baverage tenure\b", r"\bavg tenure\b"],
     "Internal Mobility Rate": [r"\binternal mobility\b"],
-    "Stay Interview Coverage": [r"\bstay interview\b"],
-    "Exit Interview Completion Rate": [r"\bexit interview\b"],
-    "Regretted Attrition Rate": [r"\bregretted attrition\b"],
-
-    # Recruiting
+    "Absenteeism Rate": [r"\babsenteeism\b"],
+    "Employee Satisfaction Score": [r"\bemployee satisfaction\b", r"\bsatisfaction score\b"],
+    "Employee NPS": [r"\bemployee nps\b", r"\benps\b", r"\bnet promoter score\b"],
+    "Engagement Score": [r"\bengagement score\b"],
     "Time to Fill": [r"\btime to fill\b"],
     "Time to Hire": [r"\btime to hire\b"],
     "Offer Acceptance Rate": [r"\boffer acceptance\b"],
     "Quality of Hire": [r"\bquality of hire\b"],
     "Cost per Hire": [r"\bcost per hire\b"],
-    "Candidate Drop-off Rate": [r"\bdrop[- ]off\b"],
-    "Interview to Offer Ratio": [r"\binterview to offer\b"],
-
-    # Engagement / satisfaction
-    "Employee Satisfaction Score": [r"\bemployee satisfaction\b", r"\bsatisfaction score\b"],
-    "Employee NPS": [r"\bemployee nps\b", r"\benps\b", r"\bnet promoter score\b"],
-    "Engagement Score": [r"\bengagement score\b"],
-
-    # Attendance / diversity
-    "Absenteeism Rate": [r"\babsenteeism\b"],
-    "Diversity Ratio": [r"\bdiversity ratio\b"],
-
-    # Workforce
-    "Headcount Growth": [r"\bheadcount growth\b"],
-    "Vacancy Rate": [r"\bvacancy rate\b"],
-    "Time to Backfill": [r"\btime to backfill\b"],
-    "Capacity Utilization": [r"\bcapacity utilization\b"],
-    "Forecast Accuracy": [r"\bforecast accuracy\b"],
-
-    # JD/ATS
-    "JD Parsing Accuracy": [r"\bjd parsing\b", r"\bjob description parsing\b"],
-    "Skills Extraction Precision": [r"\bskills extraction\b", r"\bskill extraction\b"],
-    "Resume Matching Accuracy": [r"\bresume matching\b", r"\bcv matching\b"],
-    "JD-Resume Match Score": [r"\bmatch score\b"],
-    "Automation Rate": [r"\bautomation rate\b"],
-    "Throughput Per Hour": [r"\bthroughput\b"],
-    "Average Screening Time": [r"\bscreening time\b"],
-    "Recruiter Productivity": [r"\brecruiter productivity\b"],
-    "Response Latency": [r"\blatency\b", r"\bresponse time\b"],
-    "SLA Compliance": [r"\bsla compliance\b"],
-    "False Positive Match Rate": [r"\bfalse positive\b"],
 }
-
-# handy set of metric keywords to filter out generic sentences
-METRIC_WORDS = re.compile(
-    r"\b(rate|ratio|score|index|time|latency|throughput|tenure|utilization|accuracy|precision|recall|f1|cost)\b",
-    re.I,
-)
 
 EXCLUDE_PHRASES = [
     "business requirements document","brd","document","project","model","introduction","purpose","scope",
     "assumptions","out of scope","table of contents","revision history","version","author","date","appendix"
 ]
+METRIC_WORDS = re.compile(
+    r"\b(rate|ratio|score|index|time|latency|throughput|tenure|utilization|accuracy|precision|recall|f1|cost|uptime|availability|concurrent)\b",
+    re.I,
+)
 
 def canonical_from_text(s: str) -> str | None:
-    """Return canonical KPI name if any alias matches the text."""
     low = s.lower()
     for canon, pats in KPI_CANON.items():
         for pat in pats:
@@ -248,41 +238,34 @@ def canonical_from_text(s: str) -> str | None:
                 return canon
     return None
 
-# fuzzy seeds (fallback normalization)
-KPI_SEEDS = list(KPI_CANON.keys()) + [
-    "Employee Turnover Rate","Customer Churn Rate","Training Completion Rate","Internal Mobility Rate"
-]
-
 def is_probably_kpi(line: str) -> bool:
     low = line.lower()
     if any(ph in low for ph in EXCLUDE_PHRASES):
         return False
+    # Canonical alias match
     if canonical_from_text(low):
         return True
+    # JD generation + seconds/ms
+    if re.search(r"\bgenerat(e|ion|ing)\b.*\bjd\b", low) and (re.search(TARGET_SECS, low) or re.search(TARGET_UNDER_SECS, low)):
+        return True
+    # Generic metric words + target
     if METRIC_WORDS.search(low) and (find_targets(low) or re.search(r"\b(kpi|metric)\b", low)):
         return True
     return False
 
-# ---------------- Extraction ----------------
-def preprocess_for_candidates(text: str) -> list[str]:
-    pre = preprocess_text(text)
-    cands = [c.strip() for c in pre.split("\n") if c.strip()]
-    # limit overlong generic paragraphs
-    cands = [c for c in cands if len(c) <= 400]
-    return cands
+# Fuzzy fallback names
+KPI_SEEDS = list(KPI_CANON.keys()) + ["Customer Churn Rate","Training Completion Rate","Internal Mobility Rate"]
 
 def normalize_name(raw_line: str) -> str:
     canon = canonical_from_text(raw_line)
     if canon:
         return canon
     guess = re.split(r"[:\-–]| \(", raw_line, maxsplit=1)[0].strip()
-    # avoid keeping whole sentences as name
     if len(guess.split()) > 6 and not METRIC_WORDS.search(guess):
         guess = " ".join(guess.split()[:6])
     match = process.extractOne(guess, KPI_SEEDS, scorer=fuzz.WRatio)
     if match and match[1] >= 85:
         return match[0]
-    # title-case a short guess otherwise
     return guess.title()
 
 def dedup_rows(df: pd.DataFrame) -> pd.DataFrame:
@@ -293,7 +276,6 @@ def dedup_rows(df: pd.DataFrame) -> pd.DataFrame:
     for _, r in df.iterrows():
         key = _norm(r["KPI Name"])
         cur = best.get(key)
-        # prefer rows with a target value
         if cur is None or (not cur["Target Value"] and r["Target Value"]):
             best[key] = r
     return pd.DataFrame(best.values()).reset_index(drop=True)
@@ -301,9 +283,11 @@ def dedup_rows(df: pd.DataFrame) -> pd.DataFrame:
 def extract_kpis(text: str) -> pd.DataFrame:
     cols = ["KPI Name", "Description", "Target Value", "Status"]
     rows = []
+    # preprocess into candidates
+    pre = preprocess_text(text)
+    candidates = [c for c in (ln.strip() for ln in pre.split("\n")) if c]
 
-    # 1) sentence/bullet based
-    for ln in preprocess_for_candidates(text):
+    for ln in candidates:
         if not is_probably_kpi(ln):
             continue
         name = normalize_name(ln)
@@ -311,29 +295,13 @@ def extract_kpis(text: str) -> pd.DataFrame:
         desc = ln if len(ln) <= 240 else ln[:237] + "…"
         rows.append({"KPI Name": name, "Description": desc, "Target Value": targets, "Status": "Pending"})
 
-    # 2) lexicon sweep in raw text (for missed items)
-    low = text.lower()
-    for canon in KPI_CANON.keys():
-        if re.search(re.escape(canon.lower()), low) and not any(canon == r["KPI Name"] for r in rows):
-            # capture local context to find targets
-            m = re.search(re.escape(canon.lower()), low)
-            start = max(0, m.start() - 180); end = min(len(text), m.end() + 180)
-            ctx = re.sub(r"\s+", " ", text[start:end]).strip()
-            rows.append({
-                "KPI Name": canon,
-                "Description": ctx[:240] + ("…" if len(ctx) > 240 else ""),
-                "Target Value": find_targets(ctx),
-                "Status": "Pending"
-            })
-
     df = pd.DataFrame(rows, columns=cols)
     df = dedup_rows(df)
-    # always return with columns
     if df.empty:
         return pd.DataFrame(columns=cols)
     return df[cols]
 
-# ---------------- Recommendations (topic-aware) ----------------
+# ---------------- Topic-aware Recommendations ----------------
 TOPIC_KPIS = {
     "attrition_retention": [
         "Voluntary Attrition Rate","Involuntary Attrition Rate","Employee Retention Rate",
@@ -394,7 +362,6 @@ def render_editable_table(df: pd.DataFrame, editable_cols: list, key_prefix: str
     if df.empty:
         st.caption("No data available.")
         return df
-
     st.markdown(
         f"""
         <div style="display:grid;grid-template-columns:{'1fr ' * (len(df.columns))};
@@ -403,7 +370,6 @@ def render_editable_table(df: pd.DataFrame, editable_cols: list, key_prefix: str
         </div>
         """, unsafe_allow_html=True
     )
-
     updated_rows = []
     for i, row in df.iterrows():
         cols = st.columns([1 for _ in df.columns])
@@ -427,6 +393,8 @@ def render_editable_table(df: pd.DataFrame, editable_cols: list, key_prefix: str
 # ---------------- Pipeline per file ----------------
 def process_file(file):
     text = read_uploaded(file)
+    if not text or len(text.strip()) < 40:
+        st.warning(f"{file.name}: no readable text detected. If this is a PDF, ensure poppler-utils and tesseract-ocr are installed (packages.txt).")
     domain = infer_domain(text)
     topic = infer_hr_topic(text) if domain == "hr" else None
 
@@ -444,7 +412,7 @@ def process_file(file):
         "extracted": extracted, "recommended": recommended
     }
 
-# ---------------- Main UI ----------------
+# ---------------- Main ----------------
 uploads = st.file_uploader("Upload BRDs", type=["pdf","docx","txt"], accept_multiple_files=True)
 
 if st.button("Process BRDs"):
@@ -455,6 +423,7 @@ if st.button("Process BRDs"):
             process_file(f)
         st.success(f"✅ Processed {len(uploads)} BRD{'s' if len(uploads) > 1 else ''} successfully")
 
+# Render sections
 for fname, proj in st.session_state.projects.items():
     topic_text = f" — Topic: **{proj.get('topic','').replace('_',' ').title()}**" if proj.get("topic") else ""
     st.markdown(f"## 📄 {fname} — Domain: **{proj['domain'].upper()}**{topic_text}")
@@ -466,3 +435,13 @@ for fname, proj in st.session_state.projects.items():
     proj["recommended"] = render_editable_table(
         proj["recommended"], editable_cols=["Owner/ SME","Target Value"], key_prefix=f"rec_{fname}"
     )
+
+# ---------------- OCR Test ----------------
+st.markdown("---")
+if st.button("🔍 Test OCR Installation"):
+    try:
+        poppler_ver = subprocess.check_output(["pdftoppm", "-v"], stderr=subprocess.STDOUT).decode("utf-8").splitlines()[0]
+        tess_ver = subprocess.check_output(["tesseract", "--version"]).decode("utf-8").splitlines()[0]
+        st.success(f"✅ OCR Installed!\n\nPoppler: {poppler_ver}\nTesseract: {tess_ver}")
+    except Exception as e:
+        st.error(f"⚠️ OCR not available. Error: {e}")
