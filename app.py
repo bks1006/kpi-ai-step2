@@ -24,34 +24,16 @@ st.markdown(
         outline: none !important;
         box-shadow: 0 0 5px #b91c1c;
     }
-
-    /* ====== Buttons ====== */
-    div.stButton > button {
+    /* ====== Dropdown Styling ====== */
+    .stSelectbox>div>div>select {
         border: 1.5px solid #b91c1c;
-        background-color: white;
-        color: #b91c1c;
-        padding: 6px 14px;
         border-radius: 6px;
-        font-weight: 600;
-        cursor: pointer;
+        padding: 6px 8px;
     }
-    div.stButton > button:hover {
-        background-color: #b91c1c;
-        color: white;
-    }
-
-    /* Validate button clicked */
-    div.stButton > button[data-testid="validate-true"] {
-        background-color: #16a34a !important;
-        color: white !important;
-        border: 1.5px solid #16a34a !important;
-    }
-
-    /* Reject button clicked */
-    div.stButton > button[data-testid="reject-true"] {
-        background-color: #7f1d1d !important;
-        color: white !important;
-        border: 1.5px solid #7f1d1d !important;
+    .stSelectbox>div>div>select:focus {
+        border: 2px solid #b91c1c !important;
+        outline: none !important;
+        box-shadow: 0 0 5px #b91c1c;
     }
     </style>
     """,
@@ -177,18 +159,10 @@ def render_editable_table(df: pd.DataFrame, editable_cols: list, key_prefix: str
             if col in editable_cols:
                 row_data[col] = cols[j].text_input("", value=val, key=f"{key_prefix}_{i}_{col}")
             elif col == "Status":
-                validate = cols[j].button("Validate", key=f"{key_prefix}_val_{i}")
-                reject = cols[j].button("Reject", key=f"{key_prefix}_rej_{i}")
-
-                if validate:
-                    row_data[col] = "Validated"
-                    st.session_state[f"{key_prefix}_val_state_{i}"] = True
-                elif reject:
-                    row_data[col] = "Rejected"
-                    st.session_state[f"{key_prefix}_rej_state_{i}"] = True
-                else:
-                    row_data[col] = val
-
+                # Dropdown instead of buttons
+                options = ["Extracted","Recommended","Validated","Rejected"]
+                default = val if val in options else "Recommended"
+                row_data[col] = cols[j].selectbox("", options, index=options.index(default), key=f"{key_prefix}_{i}_{col}_status")
                 cols[j].markdown(status_chip(row_data[col]), unsafe_allow_html=True)
             else:
                 cols[j].write(val if val else "—")
