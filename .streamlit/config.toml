@@ -1,7 +1,6 @@
-[browser]
-gatherUsageStats = false
-
-[server]
-enableCORS = true
-enableXsrfProtection = true
-maxUploadSize = 200
+[theme]
+base="light"
+primaryColor="#b91c1c"
+backgroundColor="#ffffff"
+secondaryBackgroundColor="#ffffff"
+textColor="#000000"
