@@ -44,7 +44,7 @@ st.markdown(
 
 # ---------------- Session init ----------------
 if "projects" not in st.session_state:
-    st.session_state["projects"] = {}   # {file_name: {domain, extracted_df, recommended_df}}
+    st.session_state["projects"] = {}
 
 # ---------------- Status chip colors ----------------
 STATUS_COLORS = {
@@ -76,7 +76,7 @@ def read_text_from_bytes(data: bytes, name: str) -> str:
 def read_uploaded(file) -> str:
     return read_text_from_bytes(file.read(), file.name)
 
-# ---------------- Domain inference (simple) ----------------
+# ---------------- Domain inference ----------------
 DOMAIN_HINTS = {
     "hr": ["employee","attrition","turnover","recruitment","hiring","retention","satisfaction","absenteeism"],
     "sales": ["pipeline","deal","quota","win rate","opportunity","lead"],
@@ -103,13 +103,11 @@ KPI_SEEDS = [
     "Deployment Frequency","Change Failure Rate","On-time Delivery","Customer Churn Rate",
 ]
 
-# Lines that should never be treated as KPIs
 EXCLUDE_PHRASES = [
     "business requirements document","brd","document","project","model","introduction","purpose","scope",
     "assumptions","out of scope","table of contents","revision history","version","author","date","appendix"
 ]
 
-# Real KPI-like patterns
 STRICT_KPI_PATTERNS = [
     r"\b(rate|ratio|score|index)\b",
     r"\b(time to|average .*time|resolution time|lead time|cycle time)\b",
@@ -129,21 +127,14 @@ def find_target(s: str) -> str:
 
 def kpiish(s: str) -> bool:
     low = s.lower()
-
-    # exclude obvious headings/titles
     if any(ph in low for ph in EXCLUDE_PHRASES):
         return False
-
-    # if a numeric target exists, ensure it's tied to a metric-y word
     if find_target(s):
         if re.search(r"\b(rate|ratio|score|index|time|margin|nps|mttr|sla|churn|retention|attrition|absenteeism|conversion|win)\b", low):
             return True
-
-    # otherwise require strict KPI phrasing
     for pat in STRICT_KPI_PATTERNS:
         if re.search(pat, low):
             return True
-
     return False
 
 def extract_kpis(text: str) -> pd.DataFrame:
@@ -160,11 +151,11 @@ def extract_kpis(text: str) -> pd.DataFrame:
             "KPI Name": name,
             "Description": desc,
             "Target Value": target,
-            "Status": "Validated"   # default decision; you can change to Rejected
+            "Status": "Validated"
         })
     return pd.DataFrame(rows)
 
-# ---------------- Recommendations (fallback only) ----------------
+# ---------------- Recommendations ----------------
 FALLBACK_KPIS = {
     "hr": ["Offer Acceptance Rate","Absenteeism Rate","Training Completion Rate","Employee NPS","Internal Mobility Rate"],
     "sales": ["Win Rate","Lead Conversion","Quota Attainment","Average Deal Size","Sales Cycle Length"],
@@ -182,8 +173,6 @@ def render_editable_table(df: pd.DataFrame, editable_cols: list, key_prefix: str
     if df.empty:
         st.caption("No data available.")
         return df
-
-    # Red header bar
     st.markdown(
         f"""
         <div style="display:grid;grid-template-columns:{'1fr ' * (len(df.columns))};
@@ -193,7 +182,6 @@ def render_editable_table(df: pd.DataFrame, editable_cols: list, key_prefix: str
         """,
         unsafe_allow_html=True,
     )
-
     updated_rows = []
     for i, row in df.iterrows():
         cols = st.columns([1 for _ in df.columns])
@@ -203,7 +191,6 @@ def render_editable_table(df: pd.DataFrame, editable_cols: list, key_prefix: str
             if col in editable_cols:
                 row_data[col] = cols[j].text_input("", value=val, key=f"{key_prefix}_{i}_{col}")
             elif col == "Status":
-                # Only two review outcomes
                 options = ["Validated", "Rejected"]
                 default = val if val in options else "Validated"
                 row_data[col] = cols[j].selectbox("", options, index=options.index(default), key=f"{key_prefix}_{i}_{col}_status")
@@ -212,7 +199,6 @@ def render_editable_table(df: pd.DataFrame, editable_cols: list, key_prefix: str
                 cols[j].write(val if val else "—")
                 row_data[col] = val
         updated_rows.append(row_data)
-
     return pd.DataFrame(updated_rows)
 
 def process_file(file):
@@ -232,35 +218,21 @@ def process_file(file):
 # ---------------- Main UI ----------------
 uploads = st.file_uploader("Upload BRDs", type=["pdf","docx","txt"], accept_multiple_files=True)
 
-col_left, col_right = st.columns([1,1])
-with col_left:
-    if st.button("Process BRDs"):
-        if not uploads:
-            st.warning("Please upload at least one file")
-        else:
-            for file in uploads:
-                process_file(file)
-            st.success(f"✅ Processed {len(uploads)} BRD{'s' if len(uploads) > 1 else ''} successfully")
+if st.button("Process BRDs"):
+    if not uploads:
+        st.warning("Please upload at least one file")
+    else:
+        for file in uploads:
+            process_file(file)
+        st.success(f"✅ Processed {len(uploads)} BRD{'s' if len(uploads) > 1 else ''} successfully")
 
-with col_right:
-    if st.button("Clear results"):
-        st.session_state["projects"] = {}
-        st.info("Cleared.")
-
-# Render each BRD section
 for fname, proj in st.session_state.projects.items():
     st.markdown(f"## 📄 {fname} — Domain: **{proj['domain'].upper()}**")
-
     st.subheader("Extracted KPIs")
     proj["extracted"] = render_editable_table(
-        proj["extracted"],
-        editable_cols=["Target Value"],
-        key_prefix=f"ext_{fname}"
+        proj["extracted"], editable_cols=["Target Value"], key_prefix=f"ext_{fname}"
     )
-
     st.subheader("Recommended KPIs")
     proj["recommended"] = render_editable_table(
-        proj["recommended"],
-        editable_cols=["Owner/ SME","Target Value"],
-        key_prefix=f"rec_{fname}"
+        proj["recommended"], editable_cols=["Owner/ SME","Target Value"], key_prefix=f"rec_{fname}"
     )
