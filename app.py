@@ -13,11 +13,11 @@ st.title("AI KPI Extraction & Recommendations (Per BRD)")
 if "projects" not in st.session_state:
     st.session_state["projects"] = {}   # {file_name: {domain, extracted_df, recommended_df}}
 
-# ---------------- Styling ----------------
+# ---------------- Colors ----------------
 STATUS_COLORS = {
     "Extracted": "#b91c1c",   # red
     "Recommended": "#9ca3af", # gray
-    "Validated": "#16a34a",   # green
+    "Validated": "#e11d48",   # lighter red
     "Rejected": "#7f1d1d",    # dark red
 }
 
@@ -128,7 +128,6 @@ def render_editable_table(df: pd.DataFrame, editable_cols: list, key_prefix: str
             if col in editable_cols:
                 row_data[col] = cols[j].text_input("", value=val, key=f"{key_prefix}_{i}_{col}")
             elif col == "Status":
-                # Action buttons
                 if cols[j].button("Validate", key=f"{key_prefix}_val_{i}"):
                     row_data[col] = "Validated"
                 elif cols[j].button("Reject", key=f"{key_prefix}_rej_{i}"):
@@ -153,12 +152,14 @@ def process_file(file):
 
 # ---------------- Main UI ----------------
 uploads = st.file_uploader("Upload BRDs", type=["pdf","docx","txt"], accept_multiple_files=True)
+
 if st.button("Process BRDs"):
     if not uploads:
         st.warning("Please upload at least one file")
-    for file in uploads:
-        process_file(file)
-    st.success("Processed uploaded BRDs")
+    else:
+        for file in uploads:
+            process_file(file)
+        st.success(f"✅ Processed {len(uploads)} BRD{'s' if len(uploads) > 1 else ''} successfully")
 
 # Show projects
 for fname, proj in st.session_state.projects.items():
