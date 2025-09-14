@@ -72,8 +72,9 @@ st.markdown(
     .btn-wrap.on-reject   button { background:var(--red)!important;   border-color:var(--red)!important;   color:#fff!important; }
     .btn-wrap button:hover { filter:brightness(0.96); }
 
-    /* Review & Accept (red) */
-    .red-btn button {
+    /* Force red background + white text on Review & Accept buttons */
+    /* Streamlit renders buttons with kind="secondary" by default */
+    div.stButton > button[kind="secondary"] {
         background-color: #b91c1c !important;
         color: white !important;
         border: none !important;
@@ -81,7 +82,9 @@ st.markdown(
         padding: 0.6rem 1.2rem !important;
         font-weight: 600 !important;
     }
-    .red-btn button:hover { filter: brightness(0.9); }
+    div.stButton > button[kind="secondary"]:hover {
+        filter: brightness(0.9);
+    }
 
     /* Center helper */
     .centered { display:flex; justify-content:center; }
@@ -417,10 +420,10 @@ for fname, proj in st.session_state.projects.items():
         show = final_df[["KPI Name","Source","Owner/ SME","Target Value","Description"]].sort_values("KPI Name")
         st.dataframe(show, use_container_width=True, hide_index=True)
 
-        # --- Centered red "Review & Accept" button (no filename) ---
-        csp1, csp2, csp3 = st.columns([1,2,1])   # center the button
+        # --- Centered red "Review & Accept" button (forced red by CSS) ---
+        csp1, csp2, csp3 = st.columns([1,2,1])
         with csp2:
-            st.markdown("<div class='centered red-btn'>", unsafe_allow_html=True)
+            st.markdown("<div class='centered'>", unsafe_allow_html=True)
             if st.button("Review & Accept", key=f"accept_{fname}"):
                 st.success("✅ Finalized KPIs have been accepted successfully!")
             st.markdown("</div>", unsafe_allow_html=True)
