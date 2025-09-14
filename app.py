@@ -4,7 +4,6 @@ import streamlit as st
 
 from pypdf import PdfReader
 from docx import Document as DocxDocument
-from rapidfuzz import fuzz, process
 
 # ---------- OCR fallback ----------
 try:
@@ -29,46 +28,41 @@ st.markdown(
     """
     <style>
     :root { --brand:#b91c1c; --green:#16a34a; --red:#b91c1c; }
-    /* Headings spacing tweak */
     .block-container { padding-top: 1.2rem; }
-    /* Table header look */
     .th-row {
       background:#f3f4f6; border:1px solid #e5e7eb; border-bottom:0;
       padding:10px 12px; border-radius:10px 10px 0 0; font-weight:700;
       display:grid;
     }
-    .tb {
-      border:1px solid #e5e7eb; border-top:0; border-radius:0 0 10px 10px;
-    }
+    .tb { border:1px solid #e5e7eb; border-top:0; border-radius:0 0 10px 10px; }
     .cell { padding:10px 12px; border-top:1px solid #e5e7eb; }
 
-    /* Status chips */
     .chip { display:inline-block; padding:4px 10px; border-radius:999px; color:#fff; font-size:12px;}
     .chip-pending{ background:#9ca3af;}
     .chip-ok{ background:#16a34a;}
     .chip-bad{ background:#b91c1c;}
 
-    /* Red borders for inputs/selects/textarea */
+    /* red inputs */
     .stTextInput > div > div > input,
-    .stTextArea > div > div > textarea,
+    .stTextArea  > div > div > textarea,
     .stSelectbox > div > div > select {
       border:1.6px solid var(--brand) !important; border-radius:8px !important; background:#fff !important;
       padding:6px 8px !important;
     }
     .stTextInput > div > div > input:focus,
-    .stTextArea > div > div > textarea:focus,
+    .stTextArea  > div > div > textarea:focus,
     .stSelectbox > div > div > select:focus {
       border:2px solid var(--brand) !important; box-shadow:0 0 6px var(--brand) !important; outline:none !important;
     }
 
-    /* Action buttons inline + colored by status */
-    .action-wrap { display:flex; gap:10px; align-items:center; }
+    /* inline action buttons that colorize by status */
     .btn-wrap.on-validate button { background:var(--green)!important; border-color:var(--green)!important; color:#fff!important; }
     .btn-wrap.on-reject   button { background:var(--red)!important;   border-color:var(--red)!important;   color:#fff!important; }
     .btn-wrap button:hover { filter:brightness(0.96); }
 
-    /* Hide default "Made with Streamlit" footer (optional) */
-    footer {visibility:hidden;}
+    /* top bar */
+    .topbar { display:flex; justify-content:flex-end; align-items:center; gap:14px; }
+    .topbar .who { color:#6b7280; font-size:14px; }
     </style>
     """,
     unsafe_allow_html=True
@@ -155,7 +149,6 @@ def read_uploaded(file) -> str:
 
 # ---------- Minimal extraction / recommendation ----------
 def extract_kpis(text: str) -> pd.DataFrame:
-    # Simple demo extraction
     rows = []
     low = text.lower()
     if "attrition" in low or "retention" in low:
@@ -193,7 +186,7 @@ def render_extracted_table(brd, df, key_prefix):
     if df.empty:
         st.caption("No extracted KPIs.")
         return df
-    cols = "2fr 3fr 1.2fr 0.9fr 1.6fr"   # Actions wide enough to fit two buttons inline
+    cols = "2fr 3fr 1.2fr 0.9fr 1.6fr"
     _table_head(cols, ["KPI Name","Description","Target Value","Status","Actions"])
 
     updated = []
@@ -207,9 +200,8 @@ def render_extracted_table(brd, df, key_prefix):
             st.markdown(f"<div class='cell'>{_chip(r['Status'])}</div>", unsafe_allow_html=True)
         with c5:
             st.markdown("<div class='cell'>", unsafe_allow_html=True)
-            # inline buttons, colored by state
             v_on  = "on-validate" if r["Status"] == "Validated" else ""
-            rej_on= "on-reject" if r["Status"] == "Rejected" else ""
+            rej_on= "on-reject"   if r["Status"] == "Rejected"  else ""
             col_v, col_r = st.columns([1,1])
             with col_v:
                 st.markdown(f"<div class='btn-wrap {v_on}'>", unsafe_allow_html=True)
@@ -227,7 +219,6 @@ def render_extracted_table(brd, df, key_prefix):
                     _remove_from_final(brd, r["KPI Name"])
                 st.markdown("</div>", unsafe_allow_html=True)
             st.markdown("</div>", unsafe_allow_html=True)
-
         updated.append({"KPI Name":r["KPI Name"],"Description":r["Description"],"Target Value":target_val,"Status":r["Status"]})
     _table_tail()
     return pd.DataFrame(updated, columns=list(df.columns))
@@ -250,7 +241,7 @@ def render_recommended_table(brd, df, key_prefix):
         with c6:
             st.markdown("<div class='cell'>", unsafe_allow_html=True)
             v_on  = "on-validate" if r["Status"] == "Validated" else ""
-            rej_on= "on-reject" if r["Status"] == "Rejected" else ""
+            rej_on= "on-reject"   if r["Status"] == "Rejected"  else ""
             col_v, col_r = st.columns([1,1])
             with col_v:
                 st.markdown(f"<div class='btn-wrap {v_on}'>", unsafe_allow_html=True)
@@ -268,7 +259,6 @@ def render_recommended_table(brd, df, key_prefix):
                     _remove_from_final(brd, r["KPI Name"])
                 st.markdown("</div>", unsafe_allow_html=True)
             st.markdown("</div>", unsafe_allow_html=True)
-
         updated.append({
             "KPI Name":r["KPI Name"], "Description":r["Description"],
             "Owner/ SME":owner_val, "Target Value":target_val, "Status":r["Status"]
@@ -325,19 +315,18 @@ def process_file(file):
 # ---------- Login (centered) ----------
 def render_login():
     st.markdown("<h2 style='color:#b91c1c;text-align:center'>AI KPI System</h2>", unsafe_allow_html=True)
-    with st.container():
-        col = st.columns([1,2,1])[1]
-        with col:
-            st.write("Sign in to continue")
-            email = st.text_input("Email")
-            password = st.text_input("Password", type="password")
-            if st.button("Sign in", use_container_width=True):
-                if _check_credentials(email, password):
-                    st.session_state["auth"] = True
-                    st.session_state["user"] = email.strip().lower()
-                    st.rerun()
-                else:
-                    st.error("Invalid email or password")
+    col = st.columns([1,2,1])[1]
+    with col:
+        st.write("Sign in to continue")
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
+        if st.button("Sign in", use_container_width=True):
+            if _check_credentials(email, password):
+                st.session_state["auth"] = True
+                st.session_state["user"] = email.strip().lower()
+                st.rerun()
+            else:
+                st.error("Invalid email or password")
 
 # ======================
 #        MAIN
@@ -345,6 +334,21 @@ def render_login():
 if not st.session_state["auth"]:
     render_login()
     st.stop()
+
+# --- top-right header bar (small logout) ---
+with st.container():
+    c1, c2 = st.columns([8,1])
+    with c1:
+        st.markdown(
+            f"<div class='topbar' style='justify-content:flex-start'><span class='who'>Signed in as "
+            f"<b>{st.session_state.get('user','')}</b></span></div>", unsafe_allow_html=True
+        )
+    with c2:
+        # small logout button on the right
+        if st.button("Log out"):
+            for k in ["auth", "user", "projects", "final_kpis"]:
+                if k in st.session_state: del st.session_state[k]
+            st.rerun()
 
 st.title("AI KPI Extraction & Recommendations (Per BRD)")
 
