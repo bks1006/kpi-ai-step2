@@ -74,16 +74,20 @@ st.markdown(
 
     /* Review & Accept (red) */
     .red-btn button {
-    background-color: #b91c1c !important;
-    color: white !important;
-    border: none !important;
-    border-radius: 6px !important;
-    padding: 0.6rem 1.2rem !important;
-    font-weight: 600 !important;
-}
-.red-btn button:hover { filter: brightness(0.9); }
+        background-color: #b91c1c !important;
+        color: white !important;
+        border: none !important;
+        border-radius: 6px !important;
+        padding: 0.6rem 1.2rem !important;
+        font-weight: 600 !important;
+    }
+    .red-btn button:hover { filter: brightness(0.9); }
 
-    
+    /* Center helper */
+    .centered { display:flex; justify-content:center; }
+    </style>
+    """,
+    unsafe_allow_html=True
 )
 
 # ---------- Session defaults ----------
@@ -413,9 +417,10 @@ for fname, proj in st.session_state.projects.items():
         show = final_df[["KPI Name","Source","Owner/ SME","Target Value","Description"]].sort_values("KPI Name")
         st.dataframe(show, use_container_width=True, hide_index=True)
 
-        # --- Review & Accept button (red with white text) ---
-        st.markdown("<div class='red-btn'>", unsafe_allow_html=True)
-        if st.button(f"Review & Accept {fname}", key=f"accept_{fname}"):
-            st.success(f"✅ Finalized KPIs for **{fname}** have been accepted!")
-        st.markdown("</div>", unsafe_allow_html=True)
-
+        # --- Centered red "Review & Accept" button (no filename) ---
+        csp1, csp2, csp3 = st.columns([1,2,1])   # center the button
+        with csp2:
+            st.markdown("<div class='centered red-btn'>", unsafe_allow_html=True)
+            if st.button("Review & Accept", key=f"accept_{fname}"):
+                st.success("✅ Finalized KPIs have been accepted successfully!")
+            st.markdown("</div>", unsafe_allow_html=True)
