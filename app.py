@@ -19,7 +19,7 @@ except Exception:
 st.set_page_config(page_title="AI KPI System", layout="wide")
 st.title("AI KPI Extraction & Recommendations (Per BRD)")
 
-# ---------- Theme (red + white) ----------
+# ---------- Theme (red + white) + Button colors ----------
 st.markdown(
     """
     <style>
@@ -30,14 +30,34 @@ st.markdown(
     .stTextInput>div>div>input:focus, .stSelectbox>div>div>select:focus {
         border:2px solid var(--brand) !important; outline:none !important; box-shadow:0 0 5px var(--brand);
     }
+    /* Status chips */
     .kpi-header { background:#b91c1c; color:#fff; padding:10px 12px; border-radius:8px 8px 0 0; font-weight:700; }
     .badge { display:inline-block; padding:3px 8px; border-radius:999px; font-size:12px; color:#fff; }
     .badge-pending { background:#9ca3af; }
     .badge-validated { background:#16a34a; }
     .badge-rejected { background:#b91c1c; }
+
+    /* Simple table look */
     .table-head { background:#f8fafc; border:1px solid #f1f5f9; border-bottom:0; border-radius:8px 8px 0 0; padding:8px 12px; font-weight:700; }
     .table-body { border:1px solid #f1f5f9; border-top:0; border-radius:0 0 8px 8px; }
     .cell { padding:10px 12px; border-top:1px solid #f1f5f9; }
+
+    /* REAL button colors (within what Streamlit allows):
+       - We make ALL secondary buttons red (used for Reject)
+       - Validate uses type="primary" (blue by default)
+    */
+    button[data-testid="baseButton-secondary"] {
+        background:#ef4444 !important; color:#fff !important; border:0 !important;
+    }
+    button[data-testid="baseButton-secondary"]:hover {
+        background:#dc2626 !important;
+    }
+    button[data-testid="baseButton-primary"] {
+        background:#2563eb !important; color:#fff !important;
+    }
+    button[data-testid="baseButton-primary"]:hover {
+        background:#1d4ed8 !important;
+    }
     </style>
     """,
     unsafe_allow_html=True
@@ -63,6 +83,15 @@ def _upsert_final(brd, row):
     )
     df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
     df.drop_duplicates(subset=["KPI Name"], keep="last", inplace=True)
+    st.session_state["final_kpis"][brd] = df
+
+def _remove_from_final(brd, kpi_name):
+    df = st.session_state["final_kpis"].get(
+        brd,
+        pd.DataFrame(columns=["BRD","KPI Name","Source","Description","Owner/ SME","Target Value"])
+    )
+    if not df.empty:
+        df = df[df["KPI Name"] != kpi_name].reset_index(drop=True)
     st.session_state["final_kpis"][brd] = df
 
 # ---------- File reading (PDF w/ OCR, DOCX incl. tables) ----------
@@ -385,7 +414,7 @@ def render_extracted_table(brd, df, key_prefix):
         with c5:
             colB, colC = st.columns([1,1])
             with colB:
-                if st.button("✅ Validate", key=f"{key_prefix}_ok_{i}"):
+                if st.button("✅ Validate", key=f"{key_prefix}_ok_{i}", type="primary"):
                     r["Status"] = "Validated"
                     _upsert_final(brd, {
                         "BRD": brd,
@@ -396,8 +425,9 @@ def render_extracted_table(brd, df, key_prefix):
                         "Target Value": target_val
                     })
             with colC:
-                if st.button("🛑 Reject", key=f"{key_prefix}_rej_{i}"):
+                if st.button("🛑 Reject", key=f"{key_prefix}_rej_{i}", type="secondary"):
                     r["Status"] = "Rejected"
+                    _remove_from_final(brd, r["KPI Name"])
         updated.append({"KPI Name": r["KPI Name"], "Description": r["Description"], "Target Value": target_val, "Status": r["Status"]})
     _table_tail()
     return pd.DataFrame(updated, columns=list(df.columns))
@@ -417,7 +447,7 @@ def render_recommended_table(brd, df, key_prefix):
         with c5:
             colB, colC = st.columns([1,1])
             with colB:
-                if st.button("✅ Validate", key=f"{key_prefix}_ok_{i}"):
+                if st.button("✅ Validate", key=f"{key_prefix}_ok_{i}", type="primary"):
                     r["Status"] = "Validated"
                     _upsert_final(brd, {
                         "BRD": brd,
@@ -428,8 +458,9 @@ def render_recommended_table(brd, df, key_prefix):
                         "Target Value": target_val
                     })
             with colC:
-                if st.button("🛑 Reject", key=f"{key_prefix}_rej_{i}"):
+                if st.button("🛑 Reject", key=f"{key_prefix}_rej_{i}", type="secondary"):
                     r["Status"] = "Rejected"
+                    _remove_from_final(brd, r["KPI Name"])
         updated.append({"KPI Name": r["KPI Name"], "Owner/ SME": owner_val, "Target Value": target_val, "Status": r["Status"]})
     _table_tail()
     return pd.DataFrame(updated, columns=list(df.columns))
