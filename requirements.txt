@@ -6,5 +6,7 @@ pdf2image
 pytesseract
 Pillow
 bcrypt
+openai
+
 
 
