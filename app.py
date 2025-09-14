@@ -34,14 +34,10 @@ st.markdown(
     .badge { display:inline-block; padding:3px 8px; border-radius:999px; font-size:12px; color:#fff; }
     .badge-pending { background:#9ca3af; }
     .badge-validated { background:#16a34a; }
-    .badge-rejected { background:#7f1d1d; }
+    .badge-rejected { background:#b91c1c; }
     .table-head { background:#f8fafc; border:1px solid #f1f5f9; border-bottom:0; border-radius:8px 8px 0 0; padding:8px 12px; font-weight:700; }
     .table-body { border:1px solid #f1f5f9; border-top:0; border-radius:0 0 8px 8px; }
     .cell { padding:10px 12px; border-top:1px solid #f1f5f9; }
-    .btn { border:0; border-radius:8px; padding:6px 12px; font-weight:600; cursor:pointer; }
-    .btn-ghost { background:#f3f4f6; color:#111827; }
-    .btn-validate { background:#2563eb; color:#fff; }
-    .btn-reject { background:#ef4444; color:#fff; }
     </style>
     """,
     unsafe_allow_html=True
@@ -60,7 +56,7 @@ def _status_badge(s):
     return f"<span class='badge {cls}'>{s}</span>"
 
 def _upsert_final(brd, row):
-    """Insert/update a KPI into the final table for a BRD, dedup by KPI Name."""
+    """Insert/update KPI into the final table for a BRD, dedup by KPI Name (latest wins)."""
     df = st.session_state["final_kpis"].get(
         brd,
         pd.DataFrame(columns=["BRD","KPI Name","Source","Description","Owner/ SME","Target Value"])
@@ -378,20 +374,18 @@ def render_extracted_table(brd, df, key_prefix):
     if df.empty:
         st.caption("No extracted KPIs.")
         return df
-    _table_head(["2fr","3fr","1fr","0.9fr","2.2fr"], ["KPI Name","Description","Target Value","Status","Actions"])
+    _table_head(["2fr","3fr","1fr","0.9fr","1.4fr"], ["KPI Name","Description","Target Value","Status","Actions"])
     updated = []
     for i, r in df.iterrows():
-        c1, c2, c3, c4, c5 = st.columns([2,3,1,0.9,2.2])
+        c1, c2, c3, c4, c5 = st.columns([2,3,1,0.9,1.4])
         with c1: st.markdown(f"<div class='cell'><b>{r['KPI Name']}</b></div>", unsafe_allow_html=True)
         with c2: st.markdown(f"<div class='cell'>{r['Description']}</div>", unsafe_allow_html=True)
         with c3: target_val = st.text_input("", value=r["Target Value"], key=f"{key_prefix}_target_{i}")
         with c4: st.markdown(f"<div class='cell'>{_status_badge(r['Status'])}</div>", unsafe_allow_html=True)
         with c5:
-            colA, colB, colC = st.columns([1,1,1])
-            with colA:
-                st.markdown("<div class='cell'><button disabled class='btn btn-ghost'>Review Details</button></div>", unsafe_allow_html=True)
+            colB, colC = st.columns([1,1])
             with colB:
-                if st.button("Validate", key=f"{key_prefix}_ok_{i}"):
+                if st.button("✅ Validate", key=f"{key_prefix}_ok_{i}"):
                     r["Status"] = "Validated"
                     _upsert_final(brd, {
                         "BRD": brd,
@@ -402,7 +396,7 @@ def render_extracted_table(brd, df, key_prefix):
                         "Target Value": target_val
                     })
             with colC:
-                if st.button("Reject", key=f"{key_prefix}_rej_{i}"):
+                if st.button("🛑 Reject", key=f"{key_prefix}_rej_{i}"):
                     r["Status"] = "Rejected"
         updated.append({"KPI Name": r["KPI Name"], "Description": r["Description"], "Target Value": target_val, "Status": r["Status"]})
     _table_tail()
@@ -412,20 +406,18 @@ def render_recommended_table(brd, df, key_prefix):
     if df.empty:
         st.caption("No recommendations.")
         return df
-    _table_head(["2fr","1fr","1fr","0.8fr","2.2fr"], ["KPI Name","Owner/ SME","Target Value","Status","Actions"])
+    _table_head(["2fr","1fr","1fr","0.8fr","1.4fr"], ["KPI Name","Owner/ SME","Target Value","Status","Actions"])
     updated = []
     for i, r in df.iterrows():
-        c1, c2, c3, c4, c5 = st.columns([2,1,1,0.8,2.2])
+        c1, c2, c3, c4, c5 = st.columns([2,1,1,0.8,1.4])
         with c1: st.markdown(f"<div class='cell'><b>{r['KPI Name']}</b></div>", unsafe_allow_html=True)
         with c2: owner_val = st.text_input("", value=r["Owner/ SME"], key=f"{key_prefix}_owner_{i}")
         with c3: target_val = st.text_input("", value=r["Target Value"], key=f"{key_prefix}_target_{i}")
         with c4: st.markdown(f"<div class='cell'>{_status_badge(r['Status'])}</div>", unsafe_allow_html=True)
         with c5:
-            colA, colB, colC = st.columns([1,1,1])
-            with colA:
-                st.markdown("<div class='cell'><button disabled class='btn btn-ghost'>Review Details</button></div>", unsafe_allow_html=True)
+            colB, colC = st.columns([1,1])
             with colB:
-                if st.button("Validate", key=f"{key_prefix}_ok_{i}"):
+                if st.button("✅ Validate", key=f"{key_prefix}_ok_{i}"):
                     r["Status"] = "Validated"
                     _upsert_final(brd, {
                         "BRD": brd,
@@ -436,7 +428,7 @@ def render_recommended_table(brd, df, key_prefix):
                         "Target Value": target_val
                     })
             with colC:
-                if st.button("Reject", key=f"{key_prefix}_rej_{i}"):
+                if st.button("🛑 Reject", key=f"{key_prefix}_rej_{i}"):
                     r["Status"] = "Rejected"
         updated.append({"KPI Name": r["KPI Name"], "Owner/ SME": owner_val, "Target Value": target_val, "Status": r["Status"]})
     _table_tail()
