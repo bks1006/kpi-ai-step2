@@ -597,7 +597,7 @@ with right:
             if k in st.session_state: del st.session_state[k]
         st.rerun()
 
-st.title("AI KPI Extraction & Recommendations (Per BRD) — LLM Edition")
+st.title("AI KPI Extraction & Recommendations (Per BRD)")
 
 uploads = st.file_uploader("Upload BRDs", type=["pdf", "docx", "txt"], accept_multiple_files=True)
 
@@ -637,6 +637,7 @@ for fname, proj in st.session_state.projects.items():
             if st.button("Review & Accept", key=f"accept_{fname}"):
                 st.success("✅ Finalized KPIs have been accepted successfully!")
             st.markdown("</div>", unsafe_allow_html=True)
+
 
 
 
