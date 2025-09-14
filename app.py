@@ -28,25 +28,6 @@ st.markdown(
     """
     <style>
     :root { --brand:#b91c1c; --green:#16a34a; --red:#b91c1c; }
-    .block-container { padding-top: 1.0rem; }
-
-    /* Fixed top bar */
-    .topbar {
-      position: sticky; top: 0; z-index: 5;
-      background: white; padding: 6px 0 8px 0; margin-bottom: 4px;
-      border-bottom: 1px solid #eee;
-    }
-    .topbar-inner { display:flex; justify-content:space-between; align-items:center; }
-    .who { color:#6b7280; font-size:14px; }
-
-    /* Table header & body */
-    .th-row {
-      background:#f3f4f6; border:1px solid #e5e7eb; border-bottom:0;
-      padding:10px 12px; border-radius:10px 10px 0 0; font-weight:700;
-      display:grid;
-    }
-    .tb { border:1px solid #e5e7eb; border-top:0; border-radius:0 0 10px 10px; }
-    .cell { padding:10px 12px; border-top:1px solid #e5e7eb; }
 
     /* Status chips */
     .chip { display:inline-block; padding:4px 10px; border-radius:999px; color:#fff; font-size:12px;}
@@ -54,40 +35,30 @@ st.markdown(
     .chip-ok{ background:#16a34a;}
     .chip-bad{ background:#b91c1c;}
 
-    /* red inputs */
+    /* Input borders */
     .stTextInput > div > div > input,
     .stTextArea  > div > div > textarea,
     .stSelectbox > div > div > select {
-      border:1.6px solid var(--brand) !important; border-radius:8px !important; background:#fff !important;
-      padding:6px 8px !important;
-    }
-    .stTextInput > div > div > input:focus,
-    .stTextArea  > div > div > textarea:focus,
-    .stSelectbox > div > div > select:focus {
-      border:2px solid var(--brand) !important; box-shadow:0 0 6px var(--brand) !important; outline:none !important;
+      border:1.6px solid var(--brand) !important;
+      border-radius:8px !important;
     }
 
-    /* inline buttons colored by status */
-    .btn-wrap.on-validate button { background:var(--green)!important; border-color:var(--green)!important; color:#fff!important; }
-    .btn-wrap.on-reject   button { background:var(--red)!important;   border-color:var(--red)!important;   color:#fff!important; }
-    .btn-wrap button:hover { filter:brightness(0.96); }
+    /* Highlight Validate/Reject AFTER click */
+    .btn-wrap.on-validate button { background:var(--green)!important; color:white!important; }
+    .btn-wrap.on-reject   button { background:var(--red)!important; color:white!important; }
 
-    /* Force red background + white text on Review & Accept buttons */
-    /* Streamlit renders buttons with kind="secondary" by default */
-    div.stButton > button[kind="secondary"] {
-        background-color: #b91c1c !important;
+    /* Special rule ONLY for Review & Accept */
+    div[data-testid="stButton"][id*="accept"] > button {
+        background-color: var(--brand) !important;
         color: white !important;
         border: none !important;
         border-radius: 6px !important;
         padding: 0.6rem 1.2rem !important;
         font-weight: 600 !important;
     }
-    div.stButton > button[kind="secondary"]:hover {
+    div[data-testid="stButton"][id*="accept"] > button:hover {
         filter: brightness(0.9);
     }
-
-    /* Center helper */
-    .centered { display:flex; justify-content:center; }
     </style>
     """,
     unsafe_allow_html=True
@@ -427,3 +398,4 @@ for fname, proj in st.session_state.projects.items():
             if st.button("Review & Accept", key=f"accept_{fname}"):
                 st.success("✅ Finalized KPIs have been accepted successfully!")
             st.markdown("</div>", unsafe_allow_html=True)
+
