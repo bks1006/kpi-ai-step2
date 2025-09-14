@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import io
+import os
+import json
 import re
 import pandas as pd
 import streamlit as st
@@ -17,6 +19,24 @@ try:
 except Exception:
     OCR_AVAILABLE = False
 
+# ---------- LLM toggle & setup ----------
+USE_OPENAI = True  # set False to force heuristic fallback without calling an API
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+if USE_OPENAI and not OPENAI_API_KEY:
+    st.warning("OPENAI_API_KEY is not set. Falling back to heuristics.")
+    USE_OPENAI = False
+
+if USE_OPENAI:
+    try:
+        # OpenAI python SDK >= 1.0
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        OPENAI_MODEL = "gpt-4o-mini"  # fast & capable; you can switch to "gpt-4.1" for higher quality
+    except Exception:
+        st.warning("OpenAI SDK not available. Falling back to heuristics.")
+        USE_OPENAI = False
+
 # ---------- Demo credentials ----------
 VALID_USERS = {
     "admin@company.com": "password123",
@@ -24,7 +44,7 @@ VALID_USERS = {
 }
 
 # ---------- Page setup ----------
-st.set_page_config(page_title="AI KPI System", layout="wide")
+st.set_page_config(page_title="AI KPI System (LLM)", layout="wide")
 
 # ---------- Styles ----------
 st.markdown(
@@ -200,12 +220,12 @@ def read_text_from_bytes(data: bytes, name: str) -> str:
 def read_uploaded(file) -> str:
     return read_text_from_bytes(file.read(), file.name)
 
-# ---------- HR subdomain libraries ----------
+# ---------- Heuristic fallback (used if LLM is off/unavailable) ----------
 HR_KPI_LIB = {
     "hr_attrition_model": [
         ("Model Accuracy", "Classification accuracy of the attrition prediction model."),
         ("Voluntary Attrition Reduction", "Percent reduction in voluntary attrition vs baseline over 12 months."),
-        ("High-Risk Coverage", "Percent of high-risk employees correctly flagged with actionable insights."),
+        ("High-Risk Coverage", "Percent of high-risk employees flagged with actionable insights."),
         ("Insight Coverage", "Percent of high-risk cases with identified drivers/insights."),
         ("Dashboard Adoption", "Share of HR users who actively use the risk dashboard each month.")
     ],
@@ -225,7 +245,7 @@ HR_KPI_LIB = {
     ],
 }
 
-def detect_hr_subdomain(text: str) -> str:
+def detect_hr_subdomain_heuristic(text: str) -> str:
     low = text.lower()
     if any(k in low for k in ["attrition", "retention", "predictive model", "risk score"]):
         return "hr_attrition_model"
@@ -233,14 +253,11 @@ def detect_hr_subdomain(text: str) -> str:
         return "hr_jd_system"
     if any(k in low for k in ["ats", "requisition", "candidate experience", "application", "workflow"]):
         return "hr_ats"
-    # fallback
     return "hr_attrition_model"
 
-# ---------- Extraction / Recommendation ----------
-def extract_kpis(text: str):
-    sub = detect_hr_subdomain(text)
+def extract_kpis_heuristic(text: str) -> pd.DataFrame:
+    sub = detect_hr_subdomain_heuristic(text)
     rows = []
-
     if sub == "hr_attrition_model":
         rows = [
             {"KPI Name": "Model Accuracy", "Description": "Classification accuracy of the attrition model.", "Target Value": "≥ 85%", "Status": "Pending"},
@@ -249,37 +266,126 @@ def extract_kpis(text: str):
         ]
         if "dashboard" in text.lower():
             rows.append({"KPI Name": "Dashboard Adoption", "Description": "Active HR users of the risk dashboard per month.", "Target Value": "", "Status": "Pending"})
-
     elif sub == "hr_jd_system":
         rows = [
             {"KPI Name": "JD Generation Latency", "Description": "Median time to generate/redesign a JD.", "Target Value": "< 10 seconds", "Status": "Pending"},
             {"KPI Name": "Bias Term Reduction", "Description": "Reduction of gendered/non-inclusive terms in JDs.", "Target Value": "Increase vs baseline", "Status": "Pending"},
             {"KPI Name": "Approval Cycle Time", "Description": "Draft → manager review → HR approval time.", "Target Value": "Decrease vs baseline", "Status": "Pending"},
         ]
-
     elif sub == "hr_ats":
         rows = [
             {"KPI Name": "Application Drop-off Rate", "Description": "Percent abandoning during application stages.", "Target Value": "Decrease vs baseline", "Status": "Pending"},
             {"KPI Name": "Time-to-Fill", "Description": "Median days from requisition to offer acceptance.", "Target Value": "Decrease vs baseline", "Status": "Pending"},
             {"KPI Name": "Automation Rate", "Description": "Share of workflow steps automated end-to-end.", "Target Value": "Increase vs baseline", "Status": "Pending"},
         ]
-
     return pd.DataFrame(rows)
 
-def recommend(domain: str, existing: list, topic: str = None, raw_text: str = ""):
-    sub = detect_hr_subdomain(raw_text)
+def recommend_heuristic(existing: list, raw_text: str = "") -> list[dict]:
+    sub = detect_hr_subdomain_heuristic(raw_text)
     pool = HR_KPI_LIB[sub]
-    recs = []
+    out = []
     for name, desc in pool:
         if name not in existing:
-            recs.append({
+            out.append({"KPI Name": name, "Description": desc, "Owner/ SME": "", "Target Value": "", "Status": "Pending"})
+    return out[:5]
+
+# ---------- LLM prompts ----------
+CLASSIFY_SYS_PROMPT = (
+    "You are a precise classifier for HR BRD documents. "
+    "Classify the document into one of: "
+    "[hr_attrition_model, hr_jd_system, hr_ats]. "
+    "Return ONLY a JSON object: {\"subdomain\": \"<one_of_three>\"}."
+)
+
+EXTRACT_SYS_PROMPT = (
+    "You are an information extraction system. Given a BRD, extract KPIs explicitly required "
+    "or clearly implied. Return a JSON object with a 'kpis' array. Each item has: "
+    "{\"KPI Name\": str, \"Description\": str, \"Target Value\": str}. "
+    "If a target isn't specified, leave it empty. Keep 3-6 concise KPIs, no duplicates."
+)
+
+RECOMMEND_SYS_PROMPT = (
+    "You are a KPI recommender. Based on the BRD and the subdomain, suggest 3-6 additional KPIs "
+    "that are relevant and not in the provided list. Return a JSON object with 'kpis' array "
+    "of items {\"KPI Name\": str, \"Description\": str}. Keep names short and standard."
+)
+
+def openai_json_chat(system_prompt: str, user_prompt: str) -> dict | None:
+    """Call OpenAI chat and parse a top-level JSON object safely."""
+    try:
+        resp = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            temperature=0,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+        )
+        content = resp.choices[0].message.content.strip()
+        # Try direct JSON; if it contains code fences, strip them.
+        content = re.sub(r"^```(json)?", "", content).strip()
+        content = re.sub(r"```$", "", content).strip()
+        return json.loads(content)
+    except Exception as e:
+        # You can print e for debugging locally; Streamlit Cloud hides details.
+        return None
+
+def detect_hr_subdomain_llm(text: str) -> str:
+    payload = openai_json_chat(CLASSIFY_SYS_PROMPT, f"BRD Text:\n{text[:12000]}")
+    if payload and isinstance(payload, dict) and "subdomain" in payload:
+        v = payload["subdomain"]
+        if v in {"hr_attrition_model", "hr_jd_system", "hr_ats"}:
+            return v
+    # fallback
+    return detect_hr_subdomain_heuristic(text)
+
+def extract_kpis_llm(text: str) -> pd.DataFrame:
+    payload = openai_json_chat(EXTRACT_SYS_PROMPT, f"BRD Text:\n{text[:16000]}")
+    rows = []
+    if payload and isinstance(payload, dict) and isinstance(payload.get("kpis"), list):
+        for item in payload["kpis"]:
+            name = str(item.get("KPI Name", "")).strip()
+            if not name:
+                continue
+            rows.append({
                 "KPI Name": name,
-                "Description": desc,
+                "Description": str(item.get("Description", "")).strip(),
+                "Target Value": str(item.get("Target Value", "")).strip(),
+                "Status": "Pending",
+            })
+    if not rows:
+        # final fallback
+        return extract_kpis_heuristic(text)
+    # dedupe by name
+    df = pd.DataFrame(rows)
+    df.drop_duplicates(subset=["KPI Name"], keep="first", inplace=True)
+    return df
+
+def recommend_llm(existing: list[str], subdomain: str, text: str) -> list[dict]:
+    existing_str = ", ".join(sorted(existing))
+    user_prompt = (
+        f"Subdomain: {subdomain}\n"
+        f"Existing KPIs: {existing_str if existing_str else '(none)'}\n\n"
+        f"BRD Text:\n{text[:16000]}"
+    )
+    payload = openai_json_chat(RECOMMEND_SYS_PROMPT, user_prompt)
+    out = []
+    if payload and isinstance(payload, dict) and isinstance(payload.get("kpis"), list):
+        for item in payload["kpis"]:
+            name = str(item.get("KPI Name", "")).strip()
+            if not name or name in existing:
+                continue
+            out.append({
+                "KPI Name": name,
+                "Description": str(item.get("Description", "")).strip(),
                 "Owner/ SME": "",
                 "Target Value": "",
                 "Status": "Pending",
             })
-    return recs[:5]
+    if not out:
+        return recommend_heuristic(existing, raw_text=text)
+    # keep it tidy
+    return out[:6]
 
 # ---------- Table helpers ----------
 def _table_head(col_template: str, headers: list[str]):
@@ -306,7 +412,7 @@ def render_extracted_table(brd, df, key_prefix):
         c1, c2, c3, c4, c5 = st.columns([2,3,1.2,0.9,1.6])
         with c1: st.markdown(f"<div class='cell'><b>{r['KPI Name']}</b></div>", unsafe_allow_html=True)
         with c2: st.markdown(f"<div class='cell'>{r['Description']}</div>", unsafe_allow_html=True)
-        with c3: target_val = st.text_input("", value=r["Target Value"], key=f"{key_prefix}_t_{i}")
+        with c3: target_val = st.text_input("", value=r.get("Target Value",""), key=f"{key_prefix}_t_{i}")
         with c4: st.markdown(f"<div class='cell'>{_chip(status)}</div>", unsafe_allow_html=True)
         with c5:
             st.markdown("<div class='cell'>", unsafe_allow_html=True)
@@ -335,7 +441,6 @@ def render_extracted_table(brd, df, key_prefix):
                     st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
             st.markdown("</div>", unsafe_allow_html=True)
-
         updated.append({"KPI Name":r["KPI Name"],"Description":r["Description"],"Target Value":target_val,"Status":status})
     _table_tail()
     return pd.DataFrame(updated, columns=list(df.columns))
@@ -383,7 +488,6 @@ def render_recommended_table(brd, df, key_prefix):
                     st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
             st.markdown("</div>", unsafe_allow_html=True)
-
         updated.append({
             "KPI Name":r["KPI Name"], "Description":r["Description"],
             "Owner/ SME":owner_val, "Target Value":target_val, "Status":status
@@ -424,12 +528,19 @@ def manual_kpi_adder(brd):
 # ---------- Pipeline ----------
 def process_file(file):
     text = read_uploaded(file)
-    domain = detect_hr_subdomain(text)
-    extracted = extract_kpis(text)
-    recs = recommend(domain, extracted["KPI Name"].tolist(), raw_text=text)
+
+    if USE_OPENAI:
+        subdomain = detect_hr_subdomain_llm(text)
+        extracted = extract_kpis_llm(text)
+        recs = recommend_llm(extracted["KPI Name"].tolist(), subdomain, text)
+    else:
+        subdomain = detect_hr_subdomain_heuristic(text)
+        extracted = extract_kpis_heuristic(text)
+        recs = recommend_heuristic(extracted["KPI Name"].tolist(), raw_text=text)
+
     recommended = pd.DataFrame(recs)
     st.session_state.projects[file.name] = {
-        "extracted": extracted, "recommended": recommended, "domain": domain
+        "extracted": extracted, "recommended": recommended, "domain": subdomain
     }
     st.session_state["final_kpis"].setdefault(
         file.name, pd.DataFrame(columns=["BRD","KPI Name","Source","Description","Owner/ SME","Target Value"])
@@ -473,7 +584,7 @@ with right:
             if k in st.session_state: del st.session_state[k]
         st.rerun()
 
-st.title("AI KPI Extraction & Recommendations (Per BRD)")
+st.title("AI KPI Extraction & Recommendations (Per BRD) — LLM Edition")
 
 uploads = st.file_uploader("Upload BRDs", type=["pdf", "docx", "txt"], accept_multiple_files=True)
 
