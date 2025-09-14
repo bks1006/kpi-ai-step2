@@ -6,7 +6,6 @@ import re
 import json
 import pandas as pd
 import streamlit as st
-
 from pypdf import PdfReader
 from docx import Document as DocxDocument
 
@@ -31,45 +30,44 @@ if USE_OPENAI:
     try:
         from openai import OpenAI
         client = OpenAI(api_key=OPENAI_API_KEY)
-        OPENAI_MODEL = "gpt-4o-mini"  # switch to "gpt-4.1" if you want max quality
+        OPENAI_MODEL = "gpt-4o-mini"  # switch to "gpt-4.1" for higher quality if you want
     except Exception:
         st.info("OpenAI SDK unavailable. Running in heuristic mode.")
         USE_OPENAI = False
 
-# ---------------- Demo credentials ----------------
+# ---------- Demo credentials ----------
 VALID_USERS = {
     "admin@company.com": "password123",
     "user@company.com": "welcome123"
 }
 
-# ---------------- Page setup ----------------
+# ---------- Page setup ----------
 st.set_page_config(page_title="AI KPI System", layout="wide")
 
-# ---------------- Styles ----------------
+# ---------- Styles ----------
 st.markdown(
     """
     <style>
     :root { --brand:#b91c1c; --green:#16a34a; --red:#b91c1c; }
     body, .stApp { background:#ffffff !important; }
 
-    /* Title */
-    .app-title { color:var(--brand); text-align:center; font-weight:800; font-size:2.2rem; margin:0 0 1.25rem 0; }
-
-    /* ---------- LOGIN LAYOUT ---------- */
-    .login-wrap {
-      min-height: 88vh;            /* center vertically */
-      display: flex; align-items: center; justify-content: center;
+    /* ---------- LOGIN OVERLAY (fixes "misplaced") ---------- */
+    .login-overlay {
+      position: fixed; inset: 0; z-index: 9999;
+      background: #ffffff;
+      display: grid; place-items: center;
+      padding: 2rem;  /* breathing room on tiny screens */
     }
     .login-card {
-      width: 420px; background:#fff; border:2px solid var(--brand);
-      border-radius:12px; padding:2rem; box-shadow:0 4px 12px rgba(0,0,0,.05);
+      width: 420px; max-width: 92vw;
+      background:#fff; border:2px solid var(--brand);
+      border-radius:12px; padding:2rem;
+      box-shadow:0 4px 12px rgba(0,0,0,.05);
     }
-    .login-card .help { color:#6b7280; margin-bottom:1rem; }
+    .app-title { color:var(--brand); text-align:center; font-weight:800; font-size:2.2rem; margin:0 0 1rem 0; }
+    .login-card .help { color:#6b7280; margin-bottom:1rem; text-align:center; }
 
-    /* Field labels */
-    .login-card label { font-weight:600; color:var(--brand); }
-
-    /* Inputs with solid red border */
+    /* Fields with solid red border (no focus highlight changes) */
     .login-card .stTextInput > div > div,
     .login-card .stPasswordInput > div > div {
       border:1.6px solid var(--brand) !important;
@@ -83,6 +81,7 @@ st.markdown(
       border:none !important; outline:none !important; box-shadow:none !important;
       width:100% !important; color:#111 !important;
     }
+    .login-card label { font-weight:600; color:var(--brand); }
 
     /* Sign in button — centered, full width, red/white */
     .login-card .stButton > button {
@@ -98,26 +97,20 @@ st.markdown(
     .topbar-inner { display:flex; justify-content:space-between; align-items:center; }
     .who { color:#6b7280; font-size:14px; }
 
-    /* Section tables */
     .th-row { background:#f3f4f6; border:1px solid #e5e7eb; border-bottom:0;
               padding:10px 12px; border-radius:10px 10px 0 0; font-weight:700; display:grid; }
     .tb { border:1px solid #e5e7eb; border-top:0; border-radius:0 0 10px 10px; }
     .cell { padding:10px 12px; border-top:1px solid #e5e7eb; }
 
-    /* Status chips */
     .chip { display:inline-block; padding:4px 10px; border-radius:999px; color:#fff; font-size:12px; }
-    .chip-pending { background:#9ca3af; }
-    .chip-ok      { background:#16a34a; }
-    .chip-bad     { background:#b91c1c; }
+    .chip-pending { background:#9ca3af; } .chip-ok { background:#16a34a; } .chip-bad { background:#b91c1c; }
 
-    /* Validate/Reject default and active states */
     .btn-wrap button { background:#f9fafb !important; color:#111827 !important;
                        border:1px solid #e5e7eb !important; border-radius:8px !important;
                        padding:.45rem .9rem !important; font-weight:600 !important; }
     .btn-wrap.on-validate button { background:var(--green)!important; color:#fff!important; }
     .btn-wrap.on-reject   button { background:var(--red)!important;   color:#fff!important; }
 
-    /* Big red Review & Accept */
     .accept-btn .stButton>button {
       background:#b91c1c !important; color:#fff !important; border:none !important;
       border-radius:10px !important; padding:.7rem 1.3rem !important; font-weight:700 !important;
@@ -130,32 +123,28 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# ---------------- Session defaults ----------------
+# ---------- Session defaults ----------
 if "auth" not in st.session_state: st.session_state["auth"] = False
 if "user" not in st.session_state: st.session_state["user"] = None
 if "projects" not in st.session_state: st.session_state["projects"] = {}
-if "final_kpis" not in st.session_state:
-    st.session_state["final_kpis"] = {}
+if "final_kpis" not in st.session_state: st.session_state["final_kpis"] = {}
 
-# ---------------- Auth helpers ----------------
+# ---------- Auth ----------
 def _check_credentials(email: str, password: str) -> bool:
     return email.strip().lower() in VALID_USERS and VALID_USERS[email.strip().lower()] == password
 
-# ---------------- File reading ----------------
+# ---------- File reading ----------
 def read_text_from_bytes(data: bytes, name: str) -> str:
     bio = io.BytesIO(data)
     lname = name.lower()
 
     if lname.endswith(".pdf"):
-        # try text first
         try:
             reader = PdfReader(bio)
             txt = "\n".join((p.extract_text() or "") for p in reader.pages)
-            if txt.strip():
-                return txt
+            if txt.strip(): return txt
         except Exception:
             pass
-        # OCR fallback if available
         if OCR_AVAILABLE:
             try:
                 imgs = convert_from_bytes(data)
@@ -186,15 +175,12 @@ def read_text_from_bytes(data: bytes, name: str) -> str:
 def read_uploaded(file) -> str:
     return read_text_from_bytes(file.read(), file.name)
 
-# ---------------- Heuristic (fallback) logic ----------------
+# ---------- Heuristic fallback ----------
 def detect_hr_subdomain_heuristic(text: str) -> str:
     low = text.lower()
-    if any(k in low for k in ["attrition", "retention", "predictive model", "risk score"]):
-        return "hr_attrition_model"
-    if any(k in low for k in ["job description", " jd ", "inclusive", "bias", "role profile"]):
-        return "hr_jd_system"
-    if any(k in low for k in ["ats", "requisition", "candidate", "application", "workflow"]):
-        return "hr_ats"
+    if any(k in low for k in ["attrition", "retention", "predictive model", "risk score"]): return "hr_attrition_model"
+    if any(k in low for k in ["job description", " jd ", "inclusive", "bias", "role profile"]): return "hr_jd_system"
+    if any(k in low for k in ["ats", "requisition", "candidate", "application", "workflow"]): return "hr_ats"
     return "hr_attrition_model"
 
 def extract_kpis_heuristic(text: str) -> pd.DataFrame:
@@ -211,7 +197,7 @@ def extract_kpis_heuristic(text: str) -> pd.DataFrame:
             {"KPI Name":"Bias Term Reduction","Description":"Reduction of gendered/non-inclusive terms in JDs.","Target Value":"Increase vs baseline","Status":"Pending"},
             {"KPI Name":"Approval Cycle Time","Description":"Draft → manager → HR final approval time.","Target Value":"Decrease vs baseline","Status":"Pending"}
         ]
-    else:  # hr_ats
+    else:
         rows = [
             {"KPI Name":"Application Drop-off Rate","Description":"Share abandoning during application flow.","Target Value":"Decrease vs baseline","Status":"Pending"},
             {"KPI Name":"Time-to-Fill","Description":"Days from requisition open to offer accept.","Target Value":"Decrease vs baseline","Status":"Pending"},
@@ -220,18 +206,9 @@ def extract_kpis_heuristic(text: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 HR_KPI_LIB = {
-    "hr_attrition_model": [
-        ("Dashboard Adoption","Share of HR users active monthly."),
-        ("High-Risk Coverage","Percent of high-risk employees flagged.")
-    ],
-    "hr_jd_system": [
-        ("JD Repository Utilization","Share of roles using templates."),
-        ("Hiring Manager Adoption","Share of managers using the tool.")
-    ],
-    "hr_ats": [
-        ("Candidate Satisfaction (CSAT)","Post-application/interview score."),
-        ("Recruiter Productivity","Requisitions handled per recruiter.")
-    ]
+    "hr_attrition_model": [("Dashboard Adoption","Share of HR users active monthly."), ("High-Risk Coverage","Percent of high-risk employees flagged.")],
+    "hr_jd_system": [("JD Repository Utilization","Share of roles using templates."), ("Hiring Manager Adoption","Share of managers using the tool.")],
+    "hr_ats": [("Candidate Satisfaction (CSAT)","Post-application/interview score."), ("Recruiter Productivity","Requisitions handled per recruiter.")]
 }
 
 def recommend_heuristic(existing_names: list[str], raw_text: str) -> list[dict]:
@@ -242,29 +219,23 @@ def recommend_heuristic(existing_names: list[str], raw_text: str) -> list[dict]:
             out.append({"KPI Name":name, "Description":desc, "Owner/ SME":"", "Target Value":"", "Status":"Pending"})
     return out
 
-# ---------------- LLM prompts/helpers ----------------
-CLASSIFY_SYS_PROMPT = (
-    "Classify the HR BRD into one of: hr_attrition_model, hr_jd_system, hr_ats. "
-    "Return ONLY JSON: {\"subdomain\": \"<one>\"}."
-)
+# ---------- LLM prompts/helpers ----------
+CLASSIFY_SYS_PROMPT = "Classify the HR BRD into one of: hr_attrition_model, hr_jd_system, hr_ats. Return ONLY JSON: {\"subdomain\": \"<one>\"}."
 EXTRACT_SYS_PROMPT = (
     "Extract 3-6 KPIs from the BRD. Return JSON: {\"kpis\": [{\"KPI Name\": str, \"Description\": str, \"Target Value\": str}]}. "
     "Leave Target Value empty if not specified. Avoid duplicates. Keep concise."
 )
 RECOMMEND_SYS_PROMPT = (
     "Suggest 3-6 additional KPIs for the given subdomain that are NOT in the existing list. "
-    "Return JSON: {\"kpis\": [{\"KPI Name\": str, \"Description\": str}]}. Keep names standard."
+    "Return JSON: {\"kpis\": [{\"KPI Name\": str, \"Description\": str}]}."
 )
 
 def openai_json_chat(system_prompt: str, user_prompt: str) -> dict | None:
     try:
         resp = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            temperature=0,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            model=OPENAI_MODEL, temperature=0,
+            messages=[{"role": "system", "content": system_prompt},
+                      {"role": "user", "content": user_prompt}]
         )
         content = resp.choices[0].message.content.strip()
         content = re.sub(r"^```(?:json)?", "", content).strip()
@@ -285,37 +256,31 @@ def extract_kpis_llm(text: str) -> pd.DataFrame:
     if payload and isinstance(payload, dict) and isinstance(payload.get("kpis"), list):
         for item in payload["kpis"]:
             name = str(item.get("KPI Name","")).strip()
-            if not name:
-                continue
-            rows.append({
-                "KPI Name": name,
-                "Description": str(item.get("Description","")).strip(),
-                "Target Value": str(item.get("Target Value","")).strip(),
-                "Status": "Pending",
-            })
-    if not rows:
-        return extract_kpis_heuristic(text)
+            if not name: continue
+            rows.append({"KPI Name": name,
+                         "Description": str(item.get("Description","")).strip(),
+                         "Target Value": str(item.get("Target Value","")).strip(),
+                         "Status": "Pending"})
+    if not rows: return extract_kpis_heuristic(text)
     df = pd.DataFrame(rows)
     df.drop_duplicates(subset=["KPI Name"], keep="first", inplace=True)
     return df
 
 def recommend_llm(existing: list[str], subdomain: str, text: str) -> list[dict]:
     existing_str = ", ".join(sorted(existing))
-    user_prompt = f"Subdomain: {subdomain}\nExisting KPIs: {existing_str or '(none)'}\n\nBRD Text:\n{text[:16000]}"
-    payload = openai_json_chat(RECOMMEND_SYS_PROMPT, user_prompt)
+    prompt = f"Subdomain: {subdomain}\nExisting KPIs: {existing_str or '(none)'}\n\nBRD Text:\n{text[:16000]}"
+    payload = openai_json_chat(RECOMMEND_SYS_PROMPT, prompt)
     out = []
     if payload and isinstance(payload, dict) and isinstance(payload.get("kpis"), list):
         for item in payload["kpis"]:
             name = str(item.get("KPI Name","")).strip()
-            if not name or name in existing:
-                continue
+            if not name or name in existing: continue
             out.append({"KPI Name": name, "Description": str(item.get("Description","")).strip(),
                         "Owner/ SME": "", "Target Value": "", "Status": "Pending"})
-    if not out:
-        return recommend_heuristic(existing, raw_text=text)
+    if not out: return recommend_heuristic(existing, raw_text=text)
     return out[:6]
 
-# ---------------- Finalized helpers ----------------
+# ---------- Finalized helpers ----------
 def _chip(status: str) -> str:
     cls = "chip-pending"
     if status == "Validated": cls = "chip-ok"
@@ -338,7 +303,7 @@ def _remove_from_final(brd, name):
         df = df[df["KPI Name"] != name].reset_index(drop=True)
     st.session_state["final_kpis"][brd] = df
 
-# ---------------- Table helpers ----------------
+# ---------- Table helpers ----------
 def _table_head(cols, headers):
     st.markdown(
         f"<div class='th-row' style='grid-template-columns:{cols};'>" +
@@ -372,10 +337,8 @@ def render_extracted_table(brd, df, key_prefix):
                 st.markdown(f"<div class='btn-wrap {v_on}'>", unsafe_allow_html=True)
                 if st.button("Validate", key=f"{key_prefix}_ok_{i}"):
                     status = "Validated"
-                    _upsert_final(brd, {
-                        "BRD": brd, "KPI Name": r["KPI Name"], "Source": "Extracted",
-                        "Description": r["Description"], "Owner/ SME": "", "Target Value": target_val
-                    })
+                    _upsert_final(brd, {"BRD": brd, "KPI Name": r["KPI Name"], "Source": "Extracted",
+                                        "Description": r["Description"], "Owner/ SME": "", "Target Value": target_val})
                     r["Status"] = status
                     st.session_state["projects"][brd]["extracted"].iloc[i]["Status"] = status
                     st.rerun()
@@ -417,10 +380,8 @@ def render_recommended_table(brd, df, key_prefix):
                 st.markdown(f"<div class='btn-wrap {v_on}'>", unsafe_allow_html=True)
                 if st.button("Validate", key=f"{key_prefix}_ok_{i}"):
                     status = "Validated"
-                    _upsert_final(brd, {
-                        "BRD": brd, "KPI Name": r["KPI Name"], "Source": "Recommended",
-                        "Description": r["Description"], "Owner/ SME": owner_val, "Target Value": target_val
-                    })
+                    _upsert_final(brd, {"BRD": brd, "KPI Name": r["KPI Name"], "Source": "Recommended",
+                                        "Description": r["Description"], "Owner/ SME": owner_val, "Target Value": target_val})
                     r["Status"] = status
                     st.session_state["projects"][brd]["recommended"].iloc[i]["Status"] = status
                     st.rerun()
@@ -435,10 +396,8 @@ def render_recommended_table(brd, df, key_prefix):
                     st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
             st.markdown("</div>", unsafe_allow_html=True)
-        updated.append({
-            "KPI Name":r["KPI Name"], "Description":r["Description"],
-            "Owner/ SME":owner_val, "Target Value":target_val, "Status":status
-        })
+        updated.append({"KPI Name":r["KPI Name"], "Description":r["Description"],
+                        "Owner/ SME":owner_val, "Target Value":target_val, "Status":status})
     _table_tail()
     return pd.DataFrame(updated, columns=list(df.columns))
 
@@ -452,30 +411,21 @@ def manual_kpi_adder(brd):
         add = st.form_submit_button("Add KPI")
     if add:
         if not kpi_name.strip():
-            st.warning("Please enter a KPI Name.")
-            return
+            st.warning("Please enter a KPI Name."); return
         rec_df = st.session_state["projects"][brd]["recommended"]
         ext_df = st.session_state["projects"][brd]["extracted"]
         all_names = set(n.lower() for n in pd.concat([rec_df["KPI Name"], ext_df["KPI Name"]], ignore_index=True).astype(str))
         if kpi_name.strip().lower() in all_names:
-            st.warning("KPI already exists in this BRD.")
-            return
-        new_row = {
-            "KPI Name": kpi_name.strip(),
-            "Description": f"Auto-generated description for {kpi_name.strip()}",
-            "Owner/ SME": owner.strip(),
-            "Target Value": target.strip(),
-            "Status": "Pending",
-        }
+            st.warning("KPI already exists in this BRD."); return
+        new_row = {"KPI Name": kpi_name.strip(), "Description": f"Auto-generated description for {kpi_name.strip()}",
+                   "Owner/ SME": owner.strip(), "Target Value": target.strip(), "Status": "Pending"}
         rec_df = pd.concat([rec_df, pd.DataFrame([new_row])], ignore_index=True)
         st.session_state["projects"][brd]["recommended"] = rec_df
-        st.success("KPI added to Recommended.")
-        st.rerun()
+        st.success("KPI added to Recommended."); st.rerun()
 
-# ---------------- Pipeline ----------------
+# ---------- Pipeline ----------
 def process_file(file):
     text = read_uploaded(file)
-
     if USE_OPENAI:
         sub = detect_hr_subdomain_llm(text)
         extracted = extract_kpis_llm(text)
@@ -486,25 +436,18 @@ def process_file(file):
         recs = recommend_heuristic(extracted["KPI Name"].tolist(), raw_text=text)
 
     recommended = pd.DataFrame(recs)
-
-    st.session_state.projects[file.name] = {
-        "extracted": extracted,
-        "recommended": recommended,
-        "domain": sub
-    }
+    st.session_state.projects[file.name] = {"extracted": extracted, "recommended": recommended, "domain": sub}
     st.session_state["final_kpis"].setdefault(
         file.name, pd.DataFrame(columns=["BRD","KPI Name","Source","Description","Owner/ SME","Target Value"])
     )
 
-# ---------------- Login ----------------
+# ---------- Login ----------
 def login_page():
-    st.markdown("<div class='login-wrap'><div class='login-card'>", unsafe_allow_html=True)
+    st.markdown("<div class='login-overlay'><div class='login-card'>", unsafe_allow_html=True)
     st.markdown("<div class='app-title'>AI KPI System</div>", unsafe_allow_html=True)
     st.markdown("<div class='help'>Sign in to continue</div>", unsafe_allow_html=True)
-
     email = st.text_input("Email")
     password = st.text_input("Password", type="password")
-
     if st.button("Sign in"):
         if _check_credentials(email, password):
             st.session_state["auth"] = True
@@ -512,7 +455,6 @@ def login_page():
             st.rerun()
         else:
             st.error("Invalid email or password")
-
     st.markdown("</div></div>", unsafe_allow_html=True)
 
 # ===================== MAIN =====================
