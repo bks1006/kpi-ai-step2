@@ -24,6 +24,56 @@ VALID_USERS = {
 # ---------- Streamlit page setup ----------
 st.set_page_config(page_title="AI KPI System", layout="wide")
 
+# ---------- Global red/white theme & button coloring ----------
+st.markdown(
+    """
+    <style>
+    :root { --brand:#b91c1c; --green:#16a34a; --red:#b91c1c; }
+    /* Headings spacing tweak */
+    .block-container { padding-top: 1.2rem; }
+    /* Table header look */
+    .th-row {
+      background:#f3f4f6; border:1px solid #e5e7eb; border-bottom:0;
+      padding:10px 12px; border-radius:10px 10px 0 0; font-weight:700;
+      display:grid;
+    }
+    .tb {
+      border:1px solid #e5e7eb; border-top:0; border-radius:0 0 10px 10px;
+    }
+    .cell { padding:10px 12px; border-top:1px solid #e5e7eb; }
+
+    /* Status chips */
+    .chip { display:inline-block; padding:4px 10px; border-radius:999px; color:#fff; font-size:12px;}
+    .chip-pending{ background:#9ca3af;}
+    .chip-ok{ background:#16a34a;}
+    .chip-bad{ background:#b91c1c;}
+
+    /* Red borders for inputs/selects/textarea */
+    .stTextInput > div > div > input,
+    .stTextArea > div > div > textarea,
+    .stSelectbox > div > div > select {
+      border:1.6px solid var(--brand) !important; border-radius:8px !important; background:#fff !important;
+      padding:6px 8px !important;
+    }
+    .stTextInput > div > div > input:focus,
+    .stTextArea > div > div > textarea:focus,
+    .stSelectbox > div > div > select:focus {
+      border:2px solid var(--brand) !important; box-shadow:0 0 6px var(--brand) !important; outline:none !important;
+    }
+
+    /* Action buttons inline + colored by status */
+    .action-wrap { display:flex; gap:10px; align-items:center; }
+    .btn-wrap.on-validate button { background:var(--green)!important; border-color:var(--green)!important; color:#fff!important; }
+    .btn-wrap.on-reject   button { background:var(--red)!important;   border-color:var(--red)!important;   color:#fff!important; }
+    .btn-wrap button:hover { filter:brightness(0.96); }
+
+    /* Hide default "Made with Streamlit" footer (optional) */
+    footer {visibility:hidden;}
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 # ---------- Session defaults ----------
 if "auth" not in st.session_state:
     st.session_state["auth"] = False
@@ -35,17 +85,30 @@ if "final_kpis" not in st.session_state:
     st.session_state["final_kpis"] = {}
 
 # ---------- Utils ----------
-STATUS_COLORS = {"Validated": "#16a34a", "Rejected": "#dc2626", "Pending": "#9ca3af"}
-
-
-def status_chip(s: str) -> str:
-    color = STATUS_COLORS.get(s, "#6b7280")
-    return f'<span style="background:{color};color:#fff;padding:2px 8px;border-radius:10px;font-size:12px">{s}</span>'
-
-
 def _check_credentials(email: str, password: str) -> bool:
     return email.strip().lower() in VALID_USERS and VALID_USERS[email.strip().lower()] == password
 
+def _chip(status: str) -> str:
+    cls = "chip-pending"
+    if status == "Validated": cls = "chip-ok"
+    elif status == "Rejected": cls = "chip-bad"
+    return f"<span class='chip {cls}'>{status}</span>"
+
+def _upsert_final(brd, row):
+    df = st.session_state["final_kpis"].get(
+        brd, pd.DataFrame(columns=["BRD","KPI Name","Source","Description","Owner/ SME","Target Value"])
+    )
+    df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+    df.drop_duplicates(subset=["KPI Name"], keep="last", inplace=True)
+    st.session_state["final_kpis"][brd] = df
+
+def _remove_from_final(brd, name):
+    df = st.session_state["final_kpis"].get(
+        brd, pd.DataFrame(columns=["BRD","KPI Name","Source","Description","Owner/ SME","Target Value"])
+    )
+    if not df.empty:
+        df = df[df["KPI Name"] != name].reset_index(drop=True)
+    st.session_state["final_kpis"][brd] = df
 
 # ---------- File reading ----------
 def read_text_from_bytes(data: bytes, name: str) -> str:
@@ -87,79 +150,161 @@ def read_text_from_bytes(data: bytes, name: str) -> str:
     except Exception:
         return ""
 
-
 def read_uploaded(file) -> str:
     return read_text_from_bytes(file.read(), file.name)
 
-
-# ---------- KPI extraction stubs ----------
+# ---------- Minimal extraction / recommendation ----------
 def extract_kpis(text: str) -> pd.DataFrame:
     # Simple demo extraction
-    if "attrition" in text.lower():
-        rows = [
-            {"KPI Name": "Voluntary Attrition Rate", "Description": "10% reduction in voluntary attrition in 12 months.", "Target Value": "in 12 months", "Status": "Pending"},
-            {"KPI Name": "System Uptime", "Description": "Ensure system availability and scalability.", "Target Value": "", "Status": "Pending"},
-        ]
-    else:
-        rows = [
-            {"KPI Name": "Employee Retention Rate", "Description": "Percentage of employees remaining after 12 months.", "Target Value": ">85%", "Status": "Pending"}
-        ]
+    rows = []
+    low = text.lower()
+    if "attrition" in low or "retention" in low:
+        rows.append({
+            "KPI Name":"Voluntary Attrition Rate",
+            "Description":"10% reduction in voluntary attrition in 12 months.",
+            "Target Value":"in 12 months",
+            "Status":"Pending"
+        })
+    rows.append({
+        "KPI Name":"System Uptime",
+        "Description":"Ensure system availability and scalability.",
+        "Target Value":"",
+        "Status":"Pending"
+    })
     return pd.DataFrame(rows)
-
 
 def recommend(domain: str, existing: list, topic: str = None, raw_text: str = "") -> list:
     pool = ["Involuntary Attrition Rate", "Employee Retention Rate", "First Year Attrition Rate"]
     return [k for k in pool if k not in existing]
 
-
-# ---------- UI helpers ----------
-def render_kpi_table(brd: str, df: pd.DataFrame, key_prefix: str, is_recommended=False):
-    if df.empty:
-        st.caption("No data available.")
-        return df
-
+# ---------- Render helpers ----------
+def _table_head(col_template: str, headers: list[str]):
     st.markdown(
-        f"""
-        <div style="display:grid;grid-template-columns:{'1fr ' * (len(df.columns)+1)};
-        background:#f3f4f6;padding:8px 12px;font-weight:600;border-radius:6px 6px 0 0;">
-        {''.join(f"<div>{col}</div>" for col in df.columns)}<div>Actions</div>
-        </div>
-        """, unsafe_allow_html=True
+        f"<div class='th-row' style='grid-template-columns:{col_template};'>" +
+        "".join([f"<div>{h}</div>" for h in headers]) + "</div>",
+        unsafe_allow_html=True
     )
+    st.markdown("<div class='tb'>", unsafe_allow_html=True)
+
+def _table_tail():
+    st.markdown("</div>", unsafe_allow_html=True)
+
+def render_extracted_table(brd, df, key_prefix):
+    if df.empty:
+        st.caption("No extracted KPIs.")
+        return df
+    cols = "2fr 3fr 1.2fr 0.9fr 1.6fr"   # Actions wide enough to fit two buttons inline
+    _table_head(cols, ["KPI Name","Description","Target Value","Status","Actions"])
 
     updated = []
-    for i, row in df.iterrows():
-        cols = st.columns([1 for _ in range(len(df.columns)+1)])
-        row_data = {}
-        for j, col in enumerate(df.columns):
-            val = row[col]
-            if col in ["Owner/ SME", "Target Value"]:
-                row_data[col] = cols[j].text_input("", value=str(val) if pd.notna(val) else "",
-                                                   key=f"{key_prefix}_{i}_{col}")
-            elif col == "Status":
-                cols[j].markdown(status_chip(val), unsafe_allow_html=True)
-                row_data[col] = val
-            else:
-                cols[j].write(val if val else "—")
-                row_data[col] = val
+    for i, r in df.iterrows():
+        c1, c2, c3, c4, c5 = st.columns([2,3,1.2,0.9,1.6])
+        with c1: st.markdown(f"<div class='cell'><b>{r['KPI Name']}</b></div>", unsafe_allow_html=True)
+        with c2: st.markdown(f"<div class='cell'>{r['Description']}</div>", unsafe_allow_html=True)
+        with c3:
+            target_val = st.text_input("", value=r["Target Value"], key=f"{key_prefix}_t_{i}")
+        with c4:
+            st.markdown(f"<div class='cell'>{_chip(r['Status'])}</div>", unsafe_allow_html=True)
+        with c5:
+            st.markdown("<div class='cell'>", unsafe_allow_html=True)
+            # inline buttons, colored by state
+            v_on  = "on-validate" if r["Status"] == "Validated" else ""
+            rej_on= "on-reject" if r["Status"] == "Rejected" else ""
+            col_v, col_r = st.columns([1,1])
+            with col_v:
+                st.markdown(f"<div class='btn-wrap {v_on}'>", unsafe_allow_html=True)
+                if st.button("Validate", key=f"{key_prefix}_ok_{i}"):
+                    r["Status"] = "Validated"
+                    _upsert_final(brd, {
+                        "BRD": brd, "KPI Name": r["KPI Name"], "Source": "Extracted",
+                        "Description": r["Description"], "Owner/ SME": "", "Target Value": target_val
+                    })
+                st.markdown("</div>", unsafe_allow_html=True)
+            with col_r:
+                st.markdown(f"<div class='btn-wrap {rej_on}'>", unsafe_allow_html=True)
+                if st.button("Reject", key=f"{key_prefix}_rej_{i}"):
+                    r["Status"] = "Rejected"
+                    _remove_from_final(brd, r["KPI Name"])
+                st.markdown("</div>", unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
 
-        # Actions: Validate / Reject buttons
-        validate = cols[-1].button("Validate", key=f"{key_prefix}_{i}_val")
-        reject = cols[-1].button("Reject", key=f"{key_prefix}_{i}_rej")
+        updated.append({"KPI Name":r["KPI Name"],"Description":r["Description"],"Target Value":target_val,"Status":r["Status"]})
+    _table_tail()
+    return pd.DataFrame(updated, columns=list(df.columns))
 
-        if validate:
-            row_data["Status"] = "Validated"
-            st.session_state["final_kpis"].setdefault(brd, []).append(row_data)
-        elif reject:
-            row_data["Status"] = "Rejected"
-            if brd in st.session_state["final_kpis"]:
-                st.session_state["final_kpis"][brd] = [r for r in st.session_state["final_kpis"][brd]
-                                                       if r["KPI Name"] != row_data["KPI Name"]]
+def render_recommended_table(brd, df, key_prefix):
+    if df.empty:
+        st.caption("No recommended KPIs.")
+        return df
+    cols = "2fr 2.5fr 1fr 1fr 0.9fr 1.6fr"
+    _table_head(cols, ["KPI Name","Description","Owner/ SME","Target Value","Status","Actions"])
 
-        updated.append(row_data)
+    updated = []
+    for i, r in df.iterrows():
+        c1,c2,c3,c4,c5,c6 = st.columns([2,2.5,1,1,0.9,1.6])
+        with c1: st.markdown(f"<div class='cell'><b>{r['KPI Name']}</b></div>", unsafe_allow_html=True)
+        with c2: st.markdown(f"<div class='cell'>{r['Description']}</div>", unsafe_allow_html=True)
+        with c3: owner_val  = st.text_input("", value=r.get("Owner/ SME",""), key=f"{key_prefix}_o_{i}")
+        with c4: target_val = st.text_input("", value=r.get("Target Value",""), key=f"{key_prefix}_t_{i}")
+        with c5: st.markdown(f"<div class='cell'>{_chip(r['Status'])}</div>", unsafe_allow_html=True)
+        with c6:
+            st.markdown("<div class='cell'>", unsafe_allow_html=True)
+            v_on  = "on-validate" if r["Status"] == "Validated" else ""
+            rej_on= "on-reject" if r["Status"] == "Rejected" else ""
+            col_v, col_r = st.columns([1,1])
+            with col_v:
+                st.markdown(f"<div class='btn-wrap {v_on}'>", unsafe_allow_html=True)
+                if st.button("Validate", key=f"{key_prefix}_ok_{i}"):
+                    r["Status"] = "Validated"
+                    _upsert_final(brd, {
+                        "BRD": brd, "KPI Name": r["KPI Name"], "Source": "Recommended",
+                        "Description": r["Description"], "Owner/ SME": owner_val, "Target Value": target_val
+                    })
+                st.markdown("</div>", unsafe_allow_html=True)
+            with col_r:
+                st.markdown(f"<div class='btn-wrap {rej_on}'>", unsafe_allow_html=True)
+                if st.button("Reject", key=f"{key_prefix}_rej_{i}"):
+                    r["Status"] = "Rejected"
+                    _remove_from_final(brd, r["KPI Name"])
+                st.markdown("</div>", unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
 
-    return pd.DataFrame(updated)
+        updated.append({
+            "KPI Name":r["KPI Name"], "Description":r["Description"],
+            "Owner/ SME":owner_val, "Target Value":target_val, "Status":r["Status"]
+        })
+    _table_tail()
+    return pd.DataFrame(updated, columns=list(df.columns))
 
+def manual_kpi_adder(brd):
+    st.markdown("#### Add KPI manually")
+    with st.form(key=f"manual_add_{brd}", clear_on_submit=True):
+        kpi_name = st.text_input("KPI Name *", value="")
+        c3, c4 = st.columns([1,1])
+        owner    = c3.text_input("Owner/ SME", value="")
+        target   = c4.text_input("Target Value", value="")
+        add = st.form_submit_button("Add KPI")
+    if add:
+        if not kpi_name.strip():
+            st.warning("Please enter a KPI Name.")
+            return
+        rec_df = st.session_state["projects"][brd]["recommended"]
+        ext_df = st.session_state["projects"][brd]["extracted"]
+        all_names = set(n.lower() for n in pd.concat([rec_df["KPI Name"], ext_df["KPI Name"]], ignore_index=True).astype(str))
+        if kpi_name.strip().lower() in all_names:
+            st.warning("KPI already exists in this BRD.")
+            return
+        new_row = {
+            "KPI Name": kpi_name.strip(),
+            "Description": f"Auto-generated description for {kpi_name.strip()}",
+            "Owner/ SME": owner.strip(),
+            "Target Value": target.strip(),
+            "Status": "Pending",
+        }
+        rec_df = pd.concat([rec_df, pd.DataFrame([new_row])], ignore_index=True)
+        st.session_state["projects"][brd]["recommended"] = rec_df
+        st.success("KPI added to Recommended.")
+        st.rerun()
 
 # ---------- Pipeline ----------
 def process_file(file):
@@ -167,42 +312,41 @@ def process_file(file):
     extracted = extract_kpis(text)
     recs = recommend("hr", extracted["KPI Name"].tolist(), raw_text=text)
     recommended = pd.DataFrame(
-        [{"KPI Name": r, "Description": f"Auto-generated description for {r}", "Owner/ SME": "", "Target Value": "", "Status": "Pending"} for r in recs]
+        [{"KPI Name": r, "Description": f"Auto-generated description for {r}",
+          "Owner/ SME": "", "Target Value": "", "Status": "Pending"} for r in recs]
     )
     st.session_state.projects[file.name] = {
         "extracted": extracted, "recommended": recommended
     }
+    st.session_state["final_kpis"].setdefault(
+        file.name, pd.DataFrame(columns=["BRD","KPI Name","Source","Description","Owner/ SME","Target Value"])
+    )
 
-
-# ---------- Login ----------
+# ---------- Login (centered) ----------
 def render_login():
-    st.markdown("<h2 style='color:#b91c1c'>AI KPI System</h2>", unsafe_allow_html=True)
-    st.subheader("Sign in to continue")
+    st.markdown("<h2 style='color:#b91c1c;text-align:center'>AI KPI System</h2>", unsafe_allow_html=True)
+    with st.container():
+        col = st.columns([1,2,1])[1]
+        with col:
+            st.write("Sign in to continue")
+            email = st.text_input("Email")
+            password = st.text_input("Password", type="password")
+            if st.button("Sign in", use_container_width=True):
+                if _check_credentials(email, password):
+                    st.session_state["auth"] = True
+                    st.session_state["user"] = email.strip().lower()
+                    st.rerun()
+                else:
+                    st.error("Invalid email or password")
 
-    email = st.text_input("Email")
-    password = st.text_input("Password", type="password")
-
-    if st.button("Sign in"):
-        if _check_credentials(email, password):
-            st.session_state["auth"] = True
-            st.session_state["user"] = email.strip().lower()
-            st.success("Signed in successfully")
-            st.rerun()
-        else:
-            st.error("Invalid email or password")
-
-
-# ---------- Main App ----------
+# ======================
+#        MAIN
+# ======================
 if not st.session_state["auth"]:
     render_login()
     st.stop()
 
-with st.sidebar:
-    st.caption(f"Signed in as **{st.session_state.get('user','')}**")
-    if st.button("Log out"):
-        for k in ["auth", "user", "projects", "final_kpis"]:
-            if k in st.session_state: del st.session_state[k]
-        st.rerun()
+st.title("AI KPI Extraction & Recommendations (Per BRD)")
 
 uploads = st.file_uploader("Upload BRDs", type=["pdf", "docx", "txt"], accept_multiple_files=True)
 
@@ -213,28 +357,23 @@ if st.button("Process BRDs"):
         for f in uploads:
             process_file(f)
         count = len(uploads)
-        st.success("✅ Processed {} BRD{} successfully".format(count, "" if count == 1 else "s"))
+        st.success(f"✅ Processed {count} BRD{'s' if count != 1 else ''} successfully")
 
+# Show per BRD
 for fname, proj in st.session_state.projects.items():
     st.markdown(f"## 📄 {fname}")
+
     st.subheader("Extracted KPIs")
-    proj["extracted"] = render_kpi_table(fname, proj["extracted"], f"ext_{fname}")
+    proj["extracted"] = render_extracted_table(fname, proj["extracted"], key_prefix=f"ext_{fname}")
 
     st.subheader("Recommended KPIs")
-    proj["recommended"] = render_kpi_table(fname, proj["recommended"], f"rec_{fname}", is_recommended=True)
+    manual_kpi_adder(fname)
+    proj["recommended"] = render_recommended_table(fname, proj["recommended"], key_prefix=f"rec_{fname}")
 
-    # Manual add
-    with st.expander("➕ Add KPI manually"):
-        new_kpi = st.text_input(f"New KPI Name ({fname})", key=f"newkpi_{fname}")
-        if st.button(f"Add KPI to {fname}", key=f"btn_{fname}"):
-            if new_kpi:
-                new_row = {"KPI Name": new_kpi, "Description": f"Auto-generated description for {new_kpi}",
-                           "Owner/ SME": "", "Target Value": "", "Status": "Pending"}
-                proj["recommended"] = pd.concat([proj["recommended"], pd.DataFrame([new_row])], ignore_index=True)
-                st.success(f"Added {new_kpi} to recommended KPIs")
-                st.rerun()
-
-    # Show final KPIs
-    if fname in st.session_state["final_kpis"] and st.session_state["final_kpis"][fname]:
-        st.subheader("✅ Finalized KPIs")
-        st.table(pd.DataFrame(st.session_state["final_kpis"][fname]))
+    st.markdown("#### Finalized KPIs")
+    final_df = st.session_state["final_kpis"].get(fname, pd.DataFrame())
+    if final_df.empty:
+        st.caption("No validated KPIs yet for this BRD.")
+    else:
+        show = final_df[["KPI Name","Source","Owner/ SME","Target Value","Description"]].sort_values("KPI Name")
+        st.dataframe(show, use_container_width=True, hide_index=True)
