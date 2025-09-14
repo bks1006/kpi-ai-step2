@@ -74,17 +74,16 @@ st.markdown(
 
     /* Review & Accept (red) */
     .red-btn button {
-        background-color: #b91c1c !important;
-        color: white !important;
-        border: none !important;
-        border-radius: 6px !important;
-        padding: 0.6rem 1.2rem !important;
-        font-weight: 600 !important;
-    }
-    .red-btn button:hover { filter: brightness(0.9); }
-    </style>
-    """,
-    unsafe_allow_html=True
+    background-color: #b91c1c !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 6px !important;
+    padding: 0.6rem 1.2rem !important;
+    font-weight: 600 !important;
+}
+.red-btn button:hover { filter: brightness(0.9); }
+
+    
 )
 
 # ---------- Session defaults ----------
@@ -419,3 +418,4 @@ for fname, proj in st.session_state.projects.items():
         if st.button(f"Review & Accept {fname}", key=f"accept_{fname}"):
             st.success(f"✅ Finalized KPIs for **{fname}** have been accepted!")
         st.markdown("</div>", unsafe_allow_html=True)
+
