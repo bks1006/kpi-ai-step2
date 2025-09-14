@@ -551,7 +551,8 @@ if st.button("Process BRDs"):
     else:
         for f in uploads:
             process_file(f)
-        st.success(f"✅ Processed {} BRD{} successfully".format(len(uploads), "" if len(uploads)==1 else "s"))
+        st.success("✅ Processed {} BRD{} successfully".format(count, "" if count == 1 else "s"))
+
 
 # Render sections per BRD
 for fname, proj in st.session_state["projects"].items():
@@ -571,3 +572,4 @@ for fname, proj in st.session_state["projects"].items():
     else:
         show = final_df[["KPI Name","Source","Owner/ SME","Target Value","Description"]].sort_values("KPI Name")
         st.dataframe(show, use_container_width=True, hide_index=True)
+
