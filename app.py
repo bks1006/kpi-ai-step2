@@ -1,4 +1,4 @@
-import io, re
+import io, re, bcrypt
 import pandas as pd
 import streamlit as st
 
@@ -14,6 +14,85 @@ try:
     OCR_AVAILABLE = True
 except Exception:
     OCR_AVAILABLE = False
+
+
+# =========================
+#  AUTH / SIGN-IN GATE
+# =========================
+
+# Replace these with your own user hashes, or move to st.secrets["users"]
+# To generate a hash in a Python REPL:
+#   import bcrypt; bcrypt.hashpw(b"your_password", bcrypt.gensalt()).decode()
+USERS = {
+    # demo users (passwords: admin123, analyst123)
+    "admin@company.com": "$2b$12$JqGXeGYX5/3F/jqvC8vPcOK5U4m8wC7H1mQqvTfH7S1d1y8bJb6B6",
+    "analyst@company.com": "$2b$12$0xv3JX3n1Tccu7ztz7zN1eE9eJY2Z0Qv0C8W6r0U7jG3V1qK4H.ZK",
+}
+
+def _check_credentials(username: str, password: str) -> bool:
+    if not username or not password:
+        return False
+    h = USERS.get(username.strip().lower())
+    if not h:
+        return False
+    try:
+        return bcrypt.checkpw(password.encode(), h.encode())
+    except Exception:
+        return False
+
+def render_login():
+    st.set_page_config(page_title="Sign in — AI KPI System", layout="centered")
+    st.markdown(
+        """
+        <style>
+        .login-card {
+            max-width: 440px; margin: 10vh auto 0 auto; padding: 28px 28px 22px 28px;
+            border: 1px solid #e5e7eb; border-radius: 14px; background: #ffffff;
+            box-shadow: 0 6px 18px rgba(0,0,0,0.06);
+        }
+        .brand { color:#b91c1c; font-weight:800; font-size: 22px; letter-spacing: .2px; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown("<div class='login-card'>", unsafe_allow_html=True)
+    st.markdown("<div class='brand'>AI KPI System</div>", unsafe_allow_html=True)
+    st.write("Sign in to continue")
+
+    with st.form("login_form", clear_on_submit=False):
+        u = st.text_input("Email")
+        p = st.text_input("Password", type="password")
+        ok = st.form_submit_button("Sign in")
+
+    if ok:
+        if _check_credentials(u, p):
+            st.session_state["auth"] = True
+            st.session_state["user"] = u.strip().lower()
+            st.success("Signed in successfully")
+            st.experimental_rerun()
+        else:
+            st.error("Invalid email or password")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# If not authed, show login and stop
+if not st.session_state.get("auth"):
+    render_login()
+    st.stop()
+
+# Sidebar logout
+with st.sidebar:
+    st.caption(f"Signed in as **{st.session_state.get('user','')}**")
+    if st.button("Log out"):
+        for k in ["auth", "user", "projects", "final_kpis"]:
+            if k in st.session_state: del st.session_state[k]
+        st.experimental_rerun()
+
+
+# =========================
+#  ORIGINAL APP BELOW
+# =========================
 
 # ---------- Page ----------
 st.set_page_config(page_title="AI KPI System", layout="wide")
@@ -454,7 +533,6 @@ def render_recommended_table(brd, df, key_prefix):
     if df.empty:
         st.caption("No recommendations.")
         return df
-    # KPI Name & Description are READ-ONLY now
     _table_head(
         ["2fr","2.5fr","1fr","1fr","0.8fr","1.6fr"],
         ["KPI Name","Description","Owner/ SME","Target Value","Status","Actions"]
@@ -463,7 +541,7 @@ def render_recommended_table(brd, df, key_prefix):
     for i, r in df.iterrows():
         c1, c2, c3, c4, c5, c6 = st.columns([2,2.5,1,1,0.8,1.6])
         with c1: st.markdown(f"<div class='cell'><b>{r['KPI Name']}</b></div>", unsafe_allow_html=True)
-        with c2: st.markdown(f"<div class='cell'>{r.get('Description','')}</div>", unsafe_allow_html=True)
+        with c2: st.markdown(f"<div class='cell'>{r.get('Description','')}</div>", unsafe_allow_html=True)  # READ-ONLY
         with c3: owner_val = st.text_input("", value=r.get("Owner/ SME",""), key=f"{key_prefix}_owner_{i}")
         with c4: target_val = st.text_input("", value=r.get("Target Value",""), key=f"{key_prefix}_target_{i}")
         with c5: st.markdown(f"<div class='cell'>{_status_badge(r['Status'])}</div>", unsafe_allow_html=True)
@@ -494,12 +572,10 @@ def render_recommended_table(brd, df, key_prefix):
     _table_tail()
     return pd.DataFrame(updated, columns=list(df.columns))
 
-# ---------- Manual KPI adder (Recommended section) ----------
 def manual_kpi_adder(brd, topic):
     st.markdown("#### Add KPI manually")
     with st.form(key=f"manual_add_{brd}", clear_on_submit=True):
         kpi_name = st.text_input("KPI Name *", value="")
-        # description is auto-generated (read-only preview)
         suggested_desc = generate_description(kpi_name.strip(), topic) if kpi_name.strip() else ""
         if suggested_desc:
             st.caption(f"Auto description: {suggested_desc}")
