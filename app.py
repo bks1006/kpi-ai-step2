@@ -36,19 +36,16 @@ st.markdown(
     .table-body { border:1px solid #f1f5f9; border-top:0; border-radius:0 0 8px 8px; }
     .cell { padding:10px 12px; border-top:1px solid #f1f5f9; }
 
-    /* Status chips */
     .badge { display:inline-block; padding:3px 8px; border-radius:999px; font-size:12px; color:#fff; }
     .badge-pending { background:#9ca3af; }
     .badge-validated { background:#16a34a; }
     .badge-rejected { background:#b91c1c; }
 
-    /* Action pill (gives a “button toggled” feel) */
     .pill { display:inline-block; margin-top:6px; padding:6px 10px; border-radius:8px; font-weight:600; }
     .pill-green { background:#16a34a; color:#fff; }
     .pill-red { background:#b91c1c; color:#fff; }
     .pill-gray { background:#e5e7eb; color:#111827; }
 
-    /* Neutral buttons (professional) */
     button[data-testid="baseButton-secondary"]{
         background:#f3f4f6 !important; color:#111827 !important; border:1px solid #e5e7eb !important;
         border-radius:8px !important; padding:6px 12px !important;
@@ -94,13 +91,13 @@ def _remove_from_final(brd, kpi_name):
         df = df[df["KPI Name"] != kpi_name].reset_index(drop=True)
     st.session_state["final_kpis"][brd] = df
 
-# ---------- File reading (PDF native text + OCR fallback, DOCX incl. tables) ----------
+# ---------- File reading (PDF+OCR, DOCX) ----------
 def read_text_from_bytes(data, name):
     lname = name.lower()
     bio = io.BytesIO(data)
 
     if lname.endswith(".pdf"):
-        # 1) native text
+        # Native text
         try:
             reader = PdfReader(bio)
             txt = "\n".join((p.extract_text() or "") for p in reader.pages)
@@ -108,7 +105,7 @@ def read_text_from_bytes(data, name):
                 return txt
         except Exception:
             pass
-        # 2) OCR if available
+        # OCR fallback
         if OCR_AVAILABLE:
             try:
                 imgs = convert_from_bytes(data)
@@ -146,7 +143,7 @@ def read_text_from_bytes(data, name):
 def read_uploaded(file):
     return read_text_from_bytes(file.read(), file.name)
 
-# ---------- Domain & Topic inference (simple) ----------
+# ---------- Domain & Topic inference ----------
 DOMAIN_HINTS = {
     "hr": [
         "employee","attrition","turnover","recruitment","hiring","retention",
@@ -226,7 +223,6 @@ def find_targets(s):
     return " | ".join(dict.fromkeys(hits))
 
 KPI_CANON = {
-    # JD/ATS & platform KPIs
     "JD Generation Time": [
         r"\bgenerate\b.{0,40}\bjd\b.{0,40}\b(sec|seconds|ms|milliseconds|time|latency)\b",
         r"\bjd (generation|creation) time\b"
@@ -243,8 +239,6 @@ KPI_CANON = {
     "JD-Resume Match Score": [r"\bmatch score\b"],
     "Average Screening Time": [r"\bscreening time\b", r"\bscreen time\b"],
     "Response Latency": [r"\blatency\b", r"\bresponse time\b"],
-
-    # Core HR
     "Voluntary Attrition Rate": [r"\bvoluntary attrition\b", r"\bvoluntary turnover\b"],
     "Involuntary Attrition Rate": [r"\binvoluntary attrition\b", r"\binvoluntary turnover\b"],
     "Employee Retention Rate": [r"\bretention rate\b", r"\bemployee retention\b"],
@@ -455,6 +449,33 @@ def render_recommended_table(brd, df, key_prefix):
     _table_tail()
     return pd.DataFrame(updated, columns=list(df.columns))
 
+# ---------- NEW: Manual KPI adder (Recommended section) ----------
+def manual_kpi_adder(brd):
+    """Inline form to manually add a KPI into the Recommended table for this BRD."""
+    st.markdown("#### Add KPI manually")
+    with st.form(key=f"manual_add_{brd}", clear_on_submit=True):
+        c1, c2, c3 = st.columns([2,1,1])
+        kpi_name = c1.text_input("KPI Name *", value="")
+        owner    = c2.text_input("Owner/ SME", value="")
+        target   = c3.text_input("Target Value", value="")
+        add = st.form_submit_button("Add KPI")
+    if add:
+        if not kpi_name.strip():
+            st.warning("Please enter a KPI Name.")
+            return
+        rec_df = st.session_state["projects"][brd]["recommended"]
+        # dedupe (case-insensitive) across recommended & extracted
+        all_existing = set([x.lower() for x in rec_df["KPI Name"].astype(str).tolist()])
+        ext_df = st.session_state["projects"][brd]["extracted"]
+        all_existing |= set([x.lower() for x in ext_df["KPI Name"].astype(str).tolist()])
+        if kpi_name.strip().lower() in all_existing:
+            st.warning("That KPI already exists in this BRD.")
+            return
+        new_row = {"KPI Name": kpi_name.strip(), "Owner/ SME": owner.strip(), "Target Value": target.strip(), "Status": "Pending"}
+        rec_df = pd.concat([rec_df, pd.DataFrame([new_row])], ignore_index=True)
+        st.session_state["projects"][brd]["recommended"] = rec_df
+        st.success("KPI added to Recommended.")
+
 # ---------- Pipeline per file ----------
 def process_file(file):
     text = read_uploaded(file)
@@ -500,6 +521,9 @@ for fname, proj in st.session_state["projects"].items():
 
     st.subheader("Recommended KPIs")
     proj["recommended"] = render_recommended_table(fname, proj["recommended"], key_prefix=f"rec_{fname}")
+
+    # NEW: manual add panel
+    manual_kpi_adder(fname)
 
     st.markdown("<div class='kpi-header'>Finalized KPIs (This BRD)</div>", unsafe_allow_html=True)
     final_df = st.session_state["final_kpis"].get(fname, pd.DataFrame())
