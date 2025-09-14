@@ -31,32 +31,29 @@ st.markdown(
         border:2px solid var(--brand) !important; outline:none !important; box-shadow:0 0 5px var(--brand);
     }
 
-    /* Headings and sections */
     .kpi-header { background:#b91c1c; color:#fff; padding:10px 12px; border-radius:8px 8px 0 0; font-weight:700; }
     .table-head { background:#f8fafc; border:1px solid #f1f5f9; border-bottom:0; border-radius:8px 8px 0 0; padding:8px 12px; font-weight:700; }
     .table-body { border:1px solid #f1f5f9; border-top:0; border-radius:0 0 8px 8px; }
     .cell { padding:10px 12px; border-top:1px solid #f1f5f9; }
 
-    /* Status chips (left column) */
+    /* Status chips */
     .badge { display:inline-block; padding:3px 8px; border-radius:999px; font-size:12px; color:#fff; }
     .badge-pending { background:#9ca3af; }
     .badge-validated { background:#16a34a; }
     .badge-rejected { background:#b91c1c; }
 
-    /* Action pills shown next to buttons (looks like the button turned color) */
-    .pill { display:inline-block; margin-left:8px; padding:6px 10px; border-radius:8px; font-weight:600; }
+    /* Action pill (gives a “button toggled” feel) */
+    .pill { display:inline-block; margin-top:6px; padding:6px 10px; border-radius:8px; font-weight:600; }
     .pill-green { background:#16a34a; color:#fff; }
     .pill-red { background:#b91c1c; color:#fff; }
     .pill-gray { background:#e5e7eb; color:#111827; }
 
-    /* Make default buttons subtle and consistent */
-    button[data-testid="baseButton-secondary"] {
+    /* Neutral buttons (professional) */
+    button[data-testid="baseButton-secondary"]{
         background:#f3f4f6 !important; color:#111827 !important; border:1px solid #e5e7eb !important;
         border-radius:8px !important; padding:6px 12px !important;
     }
-    button[data-testid="baseButton-secondary"]:hover {
-        background:#e5e7eb !important;
-    }
+    button[data-testid="baseButton-secondary"]:hover { background:#e5e7eb !important; }
     </style>
     """,
     unsafe_allow_html=True
@@ -64,9 +61,9 @@ st.markdown(
 
 # ---------- Session ----------
 if "projects" not in st.session_state:
-    st.session_state["projects"] = {}   # {file: {domain, topic, extracted, recommended}}
+    st.session_state["projects"] = {}     # {brd: {...}}
 if "final_kpis" not in st.session_state:
-    st.session_state["final_kpis"] = {}  # brd -> DataFrame(BRD, KPI Name, Source, Description, Owner/ SME, Target Value)
+    st.session_state["final_kpis"] = {}   # brd -> DataFrame
 
 def _status_badge(s):
     cls = "badge-pending"
@@ -75,14 +72,11 @@ def _status_badge(s):
     return f"<span class='badge {cls}'>{s}</span>"
 
 def _action_pill(status):
-    if status == "Validated":
-        return "<span class='pill pill-green'>Validated</span>"
-    if status == "Rejected":
-        return "<span class='pill pill-red'>Rejected</span>"
+    if status == "Validated": return "<span class='pill pill-green'>Validated</span>"
+    if status == "Rejected":  return "<span class='pill pill-red'>Rejected</span>"
     return "<span class='pill pill-gray'>Pending</span>"
 
 def _upsert_final(brd, row):
-    """Insert/update KPI into the final table for a BRD, dedup by KPI Name (latest wins)."""
     df = st.session_state["final_kpis"].get(
         brd,
         pd.DataFrame(columns=["BRD","KPI Name","Source","Description","Owner/ SME","Target Value"])
@@ -100,12 +94,13 @@ def _remove_from_final(brd, kpi_name):
         df = df[df["KPI Name"] != kpi_name].reset_index(drop=True)
     st.session_state["final_kpis"][brd] = df
 
-# ---------- File reading (PDF w/ OCR, DOCX incl. tables) ----------
+# ---------- File reading (PDF native text + OCR fallback, DOCX incl. tables) ----------
 def read_text_from_bytes(data, name):
     lname = name.lower()
     bio = io.BytesIO(data)
 
     if lname.endswith(".pdf"):
+        # 1) native text
         try:
             reader = PdfReader(bio)
             txt = "\n".join((p.extract_text() or "") for p in reader.pages)
@@ -113,6 +108,7 @@ def read_text_from_bytes(data, name):
                 return txt
         except Exception:
             pass
+        # 2) OCR if available
         if OCR_AVAILABLE:
             try:
                 imgs = convert_from_bytes(data)
@@ -150,7 +146,7 @@ def read_text_from_bytes(data, name):
 def read_uploaded(file):
     return read_text_from_bytes(file.read(), file.name)
 
-# ---------- Domain & Topic ----------
+# ---------- Domain & Topic inference (simple) ----------
 DOMAIN_HINTS = {
     "hr": [
         "employee","attrition","turnover","recruitment","hiring","retention",
@@ -213,7 +209,7 @@ def preprocess_text(raw):
             if s: sents.append(s)
     return sents
 
-# ---------- KPI patterns ----------
+# ---------- KPI patterns & extraction ----------
 TARGET_PERCENT = r"\b(?:<|>|≤|≥)?\s*\d{1,3}(?:\.\d+)?\s*%\b"
 TARGET_RATIO   = r"\b\d+(?:\.\d+)?\s*/\s*\d+\b"
 TARGET_TIME    = r"\b(?:in|within|by)\s+\d+\s*(?:days?|weeks?|months?|quarters?|years?)\b"
@@ -235,18 +231,10 @@ KPI_CANON = {
         r"\bgenerate\b.{0,40}\bjd\b.{0,40}\b(sec|seconds|ms|milliseconds|time|latency)\b",
         r"\bjd (generation|creation) time\b"
     ],
-    "Bias Flag Rate": [
-        r"\bbias (flag|detection)\b", r"\bnon[- ]inclusive language\b"
-    ],
-    "JD Tool Adoption Rate": [
-        r"\badoption rate\b", r"\busage rate\b", r"\b% of (hiring managers|users) using\b"
-    ],
-    "JD Approval Rate": [
-        r"\bapproval workflow\b", r"\bapproved without major edits\b", r"\bapproval rate\b"
-    ],
-    "Repository Compliance": [
-        r"\bversion control\b", r"\bapproval logs\b", r"\brepository\b"
-    ],
+    "Bias Flag Rate": [r"\bbias (flag|detection)\b", r"\bnon[- ]inclusive language\b"],
+    "JD Tool Adoption Rate": [r"\badoption rate\b", r"\busage rate\b", r"\b% of (hiring managers|users) using\b"],
+    "JD Approval Rate": [r"\bapproval rate\b", r"\bapproved without major edits\b"],
+    "Repository Compliance": [r"\bversion control\b", r"\bapproval logs\b", r"\brepository\b"],
     "System Uptime": [r"\buptime\b", r"\bavailability\b", r"\b99\.\d{1,2}% availability\b"],
     "Concurrent Users Supported": [r"\bconcurrent users\b"],
     "JD Parsing Accuracy": [r"\bjd parsing\b", r"\bjob description parsing\b"],
@@ -256,7 +244,7 @@ KPI_CANON = {
     "Average Screening Time": [r"\bscreening time\b", r"\bscreen time\b"],
     "Response Latency": [r"\blatency\b", r"\bresponse time\b"],
 
-    # Core HR (kept for non-JD docs)
+    # Core HR
     "Voluntary Attrition Rate": [r"\bvoluntary attrition\b", r"\bvoluntary turnover\b"],
     "Involuntary Attrition Rate": [r"\binvoluntary attrition\b", r"\binvoluntary turnover\b"],
     "Employee Retention Rate": [r"\bretention rate\b", r"\bemployee retention\b"],
@@ -295,10 +283,8 @@ def is_probably_kpi(line):
     low = line.lower()
     if any(ph in low for ph in EXCLUDE_PHRASES): return False
     if canonical_from_text(low): return True
-    if re.search(r"\b(shall|should|must|system)\b", low) and METRIC_WORDS.search(low):
-        return True
-    if METRIC_WORDS.search(low) and (find_targets(low) or re.search(r"\b(kpi|metric)\b", low)):
-        return True
+    if re.search(r"\b(shall|should|must|system)\b", low) and METRIC_WORDS.search(low): return True
+    if METRIC_WORDS.search(low) and (find_targets(low) or re.search(r"\b(kpi|metric)\b", low)): return True
     return False
 
 KPI_SEEDS = list(KPI_CANON.keys())
@@ -413,53 +399,27 @@ def render_extracted_table(brd, df, key_prefix):
     updated = []
     for i, r in df.iterrows():
         c1, c2, c3, c4, c5 = st.columns([2,3,1,0.9,1.6])
-
         with c1: st.markdown(f"<div class='cell'><b>{r['KPI Name']}</b></div>", unsafe_allow_html=True)
         with c2: st.markdown(f"<div class='cell'>{r['Description']}</div>", unsafe_allow_html=True)
         with c3: target_val = st.text_input("", value=r["Target Value"], key=f"{key_prefix}_target_{i}")
         with c4: st.markdown(f"<div class='cell'>{_status_badge(r['Status'])}</div>", unsafe_allow_html=True)
-
         with c5:
-            left, right = st.columns([1,1])
-
-            # Validate (neutral button + colored pill)
-            with left:
-                clicked = st.button("Validate", key=f"{key_prefix}_ok_{i}")
-                if clicked:
-                    r["Status"] = "Validated"
-                    _upsert_final(brd, {
-                        "BRD": brd,
-                        "KPI Name": r["KPI Name"],
-                        "Source": "Extracted",
-                        "Description": r["Description"],
-                        "Owner/ SME": "",
-                        "Target Value": target_val
-                    })
-                # pill
-                left.markdown(
-                    "<div class='cell' style='padding-top:6px;'>" +
-                    _action_pill(r["Status"]) +
-                    "</div>", unsafe_allow_html=True
-                )
-
-            # Reject
-            with right:
-                clicked = st.button("Reject", key=f"{key_prefix}_rej_{i}")
-                if clicked:
-                    r["Status"] = "Rejected"
-                    _remove_from_final(brd, r["KPI Name"])
-                right.markdown(
-                    "<div class='cell' style='padding-top:6px;'>" +
-                    _action_pill(r["Status"]) +
-                    "</div>", unsafe_allow_html=True
-                )
-
-        updated.append({
-            "KPI Name": r["KPI Name"],
-            "Description": r["Description"],
-            "Target Value": target_val,
-            "Status": r["Status"]
-        })
+            colB, colC = st.columns([1,1])
+            if colB.button("Validate", key=f"{key_prefix}_ok_{i}"):
+                r["Status"] = "Validated"
+                _upsert_final(brd, {
+                    "BRD": brd,
+                    "KPI Name": r["KPI Name"],
+                    "Source": "Extracted",
+                    "Description": r["Description"],
+                    "Owner/ SME": "",
+                    "Target Value": target_val
+                })
+            if colC.button("Reject", key=f"{key_prefix}_rej_{i}"):
+                r["Status"] = "Rejected"
+                _remove_from_final(brd, r["KPI Name"])
+            st.markdown(_action_pill(r["Status"]), unsafe_allow_html=True)
+        updated.append({"KPI Name": r["KPI Name"], "Description": r["Description"], "Target Value": target_val, "Status": r["Status"]})
     _table_tail()
     return pd.DataFrame(updated, columns=list(df.columns))
 
@@ -471,52 +431,27 @@ def render_recommended_table(brd, df, key_prefix):
     updated = []
     for i, r in df.iterrows():
         c1, c2, c3, c4, c5 = st.columns([2,1,1,0.8,1.6])
-
         with c1: st.markdown(f"<div class='cell'><b>{r['KPI Name']}</b></div>", unsafe_allow_html=True)
         with c2: owner_val = st.text_input("", value=r["Owner/ SME"], key=f"{key_prefix}_owner_{i}")
         with c3: target_val = st.text_input("", value=r["Target Value"], key=f"{key_prefix}_target_{i}")
         with c4: st.markdown(f"<div class='cell'>{_status_badge(r['Status'])}</div>", unsafe_allow_html=True)
-
         with c5:
-            left, right = st.columns([1,1])
-
-            # Validate
-            with left:
-                clicked = st.button("Validate", key=f"{key_prefix}_ok_{i}")
-                if clicked:
-                    r["Status"] = "Validated"
-                    _upsert_final(brd, {
-                        "BRD": brd,
-                        "KPI Name": r["KPI Name"],
-                        "Source": "Recommended",
-                        "Description": "",
-                        "Owner/ SME": owner_val,
-                        "Target Value": target_val
-                    })
-                left.markdown(
-                    "<div class='cell' style='padding-top:6px;'>" +
-                    _action_pill(r["Status"]) +
-                    "</div>", unsafe_allow_html=True
-                )
-
-            # Reject
-            with right:
-                clicked = st.button("Reject", key=f"{key_prefix}_rej_{i}")
-                if clicked:
-                    r["Status"] = "Rejected"
-                    _remove_from_final(brd, r["KPI Name"])
-                right.markdown(
-                    "<div class='cell' style='padding-top:6px;'>" +
-                    _action_pill(r["Status"]) +
-                    "</div>", unsafe_allow_html=True
-                )
-
-        updated.append({
-            "KPI Name": r["KPI Name"],
-            "Owner/ SME": owner_val,
-            "Target Value": target_val,
-            "Status": r["Status"]
-        })
+            colB, colC = st.columns([1,1])
+            if colB.button("Validate", key=f"{key_prefix}_ok_{i}"):
+                r["Status"] = "Validated"
+                _upsert_final(brd, {
+                    "BRD": brd,
+                    "KPI Name": r["KPI Name"],
+                    "Source": "Recommended",
+                    "Description": "",
+                    "Owner/ SME": owner_val,
+                    "Target Value": target_val
+                })
+            if colC.button("Reject", key=f"{key_prefix}_rej_{i}"):
+                r["Status"] = "Rejected"
+                _remove_from_final(brd, r["KPI Name"])
+            st.markdown(_action_pill(r["Status"]), unsafe_allow_html=True)
+        updated.append({"KPI Name": r["KPI Name"], "Owner/ SME": owner_val, "Target Value": target_val, "Status": r["Status"]})
     _table_tail()
     return pd.DataFrame(updated, columns=list(df.columns))
 
@@ -524,7 +459,7 @@ def render_recommended_table(brd, df, key_prefix):
 def process_file(file):
     text = read_uploaded(file)
     domain = infer_domain(text)
-    topic = infer_hr_topic(text) if domain == "hr" else None
+    topic  = infer_hr_topic(text) if domain == "hr" else None
 
     extracted = extract_kpis(text)
     existing = extracted["KPI Name"].astype(str).tolist() if not extracted.empty else []
@@ -533,6 +468,7 @@ def process_file(file):
         [{"KPI Name": r, "Owner/ SME": "", "Target Value": "", "Status": "Pending"} for r in recs],
         columns=["KPI Name", "Owner/ SME", "Target Value", "Status"]
     )
+
     st.session_state["projects"][file.name] = {
         "domain": domain, "topic": topic,
         "extracted": extracted, "recommended": recommended
@@ -551,10 +487,10 @@ if st.button("Process BRDs"):
     else:
         for f in uploads:
             process_file(f)
-        st.success("✅ Processed {} BRD{} successfully".format(count, "" if count == 1 else "s"))
+        count = len(uploads)
+        st.success(f"✅ Processed {count} BRD{'s' if count != 1 else ''} successfully")
 
-
-# Render sections per BRD
+# ---------- Render per BRD ----------
 for fname, proj in st.session_state["projects"].items():
     topic_text = f" — Topic: **{proj.get('topic','').replace('_',' ').title()}**" if proj.get("topic") else ""
     st.markdown(f"## 📄 {fname} — Domain: **{proj['domain'].upper()}**{topic_text}")
@@ -572,4 +508,3 @@ for fname, proj in st.session_state["projects"].items():
     else:
         show = final_df[["KPI Name","Source","Owner/ SME","Target Value","Description"]].sort_values("KPI Name")
         st.dataframe(show, use_container_width=True, hide_index=True)
-
