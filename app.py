@@ -19,7 +19,7 @@ except Exception:
 st.set_page_config(page_title="AI KPI System", layout="wide")
 st.title("AI KPI Extraction & Recommendations (Per BRD)")
 
-# ---------- Theme (red + white) + Button colors ----------
+# ---------- Theme (red + white) ----------
 st.markdown(
     """
     <style>
@@ -30,33 +30,32 @@ st.markdown(
     .stTextInput>div>div>input:focus, .stSelectbox>div>div>select:focus {
         border:2px solid var(--brand) !important; outline:none !important; box-shadow:0 0 5px var(--brand);
     }
-    /* Status chips */
+
+    /* Headings and sections */
     .kpi-header { background:#b91c1c; color:#fff; padding:10px 12px; border-radius:8px 8px 0 0; font-weight:700; }
+    .table-head { background:#f8fafc; border:1px solid #f1f5f9; border-bottom:0; border-radius:8px 8px 0 0; padding:8px 12px; font-weight:700; }
+    .table-body { border:1px solid #f1f5f9; border-top:0; border-radius:0 0 8px 8px; }
+    .cell { padding:10px 12px; border-top:1px solid #f1f5f9; }
+
+    /* Status chips (left column) */
     .badge { display:inline-block; padding:3px 8px; border-radius:999px; font-size:12px; color:#fff; }
     .badge-pending { background:#9ca3af; }
     .badge-validated { background:#16a34a; }
     .badge-rejected { background:#b91c1c; }
 
-    /* Simple table look */
-    .table-head { background:#f8fafc; border:1px solid #f1f5f9; border-bottom:0; border-radius:8px 8px 0 0; padding:8px 12px; font-weight:700; }
-    .table-body { border:1px solid #f1f5f9; border-top:0; border-radius:0 0 8px 8px; }
-    .cell { padding:10px 12px; border-top:1px solid #f1f5f9; }
+    /* Action pills shown next to buttons (looks like the button turned color) */
+    .pill { display:inline-block; margin-left:8px; padding:6px 10px; border-radius:8px; font-weight:600; }
+    .pill-green { background:#16a34a; color:#fff; }
+    .pill-red { background:#b91c1c; color:#fff; }
+    .pill-gray { background:#e5e7eb; color:#111827; }
 
-    /* REAL button colors (within what Streamlit allows):
-       - We make ALL secondary buttons red (used for Reject)
-       - Validate uses type="primary" (blue by default)
-    */
+    /* Make default buttons subtle and consistent */
     button[data-testid="baseButton-secondary"] {
-        background:#ef4444 !important; color:#fff !important; border:0 !important;
+        background:#f3f4f6 !important; color:#111827 !important; border:1px solid #e5e7eb !important;
+        border-radius:8px !important; padding:6px 12px !important;
     }
     button[data-testid="baseButton-secondary"]:hover {
-        background:#dc2626 !important;
-    }
-    button[data-testid="baseButton-primary"] {
-        background:#2563eb !important; color:#fff !important;
-    }
-    button[data-testid="baseButton-primary"]:hover {
-        background:#1d4ed8 !important;
+        background:#e5e7eb !important;
     }
     </style>
     """,
@@ -74,6 +73,13 @@ def _status_badge(s):
     if s == "Validated": cls = "badge-validated"
     elif s == "Rejected": cls = "badge-rejected"
     return f"<span class='badge {cls}'>{s}</span>"
+
+def _action_pill(status):
+    if status == "Validated":
+        return "<span class='pill pill-green'>Validated</span>"
+    if status == "Rejected":
+        return "<span class='pill pill-red'>Rejected</span>"
+    return "<span class='pill pill-gray'>Pending</span>"
 
 def _upsert_final(brd, row):
     """Insert/update KPI into the final table for a BRD, dedup by KPI Name (latest wins)."""
@@ -403,18 +409,23 @@ def render_extracted_table(brd, df, key_prefix):
     if df.empty:
         st.caption("No extracted KPIs.")
         return df
-    _table_head(["2fr","3fr","1fr","0.9fr","1.4fr"], ["KPI Name","Description","Target Value","Status","Actions"])
+    _table_head(["2fr","3fr","1fr","0.9fr","1.6fr"], ["KPI Name","Description","Target Value","Status","Actions"])
     updated = []
     for i, r in df.iterrows():
-        c1, c2, c3, c4, c5 = st.columns([2,3,1,0.9,1.4])
+        c1, c2, c3, c4, c5 = st.columns([2,3,1,0.9,1.6])
+
         with c1: st.markdown(f"<div class='cell'><b>{r['KPI Name']}</b></div>", unsafe_allow_html=True)
         with c2: st.markdown(f"<div class='cell'>{r['Description']}</div>", unsafe_allow_html=True)
         with c3: target_val = st.text_input("", value=r["Target Value"], key=f"{key_prefix}_target_{i}")
         with c4: st.markdown(f"<div class='cell'>{_status_badge(r['Status'])}</div>", unsafe_allow_html=True)
+
         with c5:
-            colB, colC = st.columns([1,1])
-            with colB:
-                if st.button("✅ Validate", key=f"{key_prefix}_ok_{i}", type="primary"):
+            left, right = st.columns([1,1])
+
+            # Validate (neutral button + colored pill)
+            with left:
+                clicked = st.button("Validate", key=f"{key_prefix}_ok_{i}")
+                if clicked:
                     r["Status"] = "Validated"
                     _upsert_final(brd, {
                         "BRD": brd,
@@ -424,11 +435,31 @@ def render_extracted_table(brd, df, key_prefix):
                         "Owner/ SME": "",
                         "Target Value": target_val
                     })
-            with colC:
-                if st.button("🛑 Reject", key=f"{key_prefix}_rej_{i}", type="secondary"):
+                # pill
+                left.markdown(
+                    "<div class='cell' style='padding-top:6px;'>" +
+                    _action_pill(r["Status"]) +
+                    "</div>", unsafe_allow_html=True
+                )
+
+            # Reject
+            with right:
+                clicked = st.button("Reject", key=f"{key_prefix}_rej_{i}")
+                if clicked:
                     r["Status"] = "Rejected"
                     _remove_from_final(brd, r["KPI Name"])
-        updated.append({"KPI Name": r["KPI Name"], "Description": r["Description"], "Target Value": target_val, "Status": r["Status"]})
+                right.markdown(
+                    "<div class='cell' style='padding-top:6px;'>" +
+                    _action_pill(r["Status"]) +
+                    "</div>", unsafe_allow_html=True
+                )
+
+        updated.append({
+            "KPI Name": r["KPI Name"],
+            "Description": r["Description"],
+            "Target Value": target_val,
+            "Status": r["Status"]
+        })
     _table_tail()
     return pd.DataFrame(updated, columns=list(df.columns))
 
@@ -436,18 +467,23 @@ def render_recommended_table(brd, df, key_prefix):
     if df.empty:
         st.caption("No recommendations.")
         return df
-    _table_head(["2fr","1fr","1fr","0.8fr","1.4fr"], ["KPI Name","Owner/ SME","Target Value","Status","Actions"])
+    _table_head(["2fr","1fr","1fr","0.8fr","1.6fr"], ["KPI Name","Owner/ SME","Target Value","Status","Actions"])
     updated = []
     for i, r in df.iterrows():
-        c1, c2, c3, c4, c5 = st.columns([2,1,1,0.8,1.4])
+        c1, c2, c3, c4, c5 = st.columns([2,1,1,0.8,1.6])
+
         with c1: st.markdown(f"<div class='cell'><b>{r['KPI Name']}</b></div>", unsafe_allow_html=True)
         with c2: owner_val = st.text_input("", value=r["Owner/ SME"], key=f"{key_prefix}_owner_{i}")
         with c3: target_val = st.text_input("", value=r["Target Value"], key=f"{key_prefix}_target_{i}")
         with c4: st.markdown(f"<div class='cell'>{_status_badge(r['Status'])}</div>", unsafe_allow_html=True)
+
         with c5:
-            colB, colC = st.columns([1,1])
-            with colB:
-                if st.button("✅ Validate", key=f"{key_prefix}_ok_{i}", type="primary"):
+            left, right = st.columns([1,1])
+
+            # Validate
+            with left:
+                clicked = st.button("Validate", key=f"{key_prefix}_ok_{i}")
+                if clicked:
                     r["Status"] = "Validated"
                     _upsert_final(brd, {
                         "BRD": brd,
@@ -457,11 +493,30 @@ def render_recommended_table(brd, df, key_prefix):
                         "Owner/ SME": owner_val,
                         "Target Value": target_val
                     })
-            with colC:
-                if st.button("🛑 Reject", key=f"{key_prefix}_rej_{i}", type="secondary"):
+                left.markdown(
+                    "<div class='cell' style='padding-top:6px;'>" +
+                    _action_pill(r["Status"]) +
+                    "</div>", unsafe_allow_html=True
+                )
+
+            # Reject
+            with right:
+                clicked = st.button("Reject", key=f"{key_prefix}_rej_{i}")
+                if clicked:
                     r["Status"] = "Rejected"
                     _remove_from_final(brd, r["KPI Name"])
-        updated.append({"KPI Name": r["KPI Name"], "Owner/ SME": owner_val, "Target Value": target_val, "Status": r["Status"]})
+                right.markdown(
+                    "<div class='cell' style='padding-top:6px;'>" +
+                    _action_pill(r["Status"]) +
+                    "</div>", unsafe_allow_html=True
+                )
+
+        updated.append({
+            "KPI Name": r["KPI Name"],
+            "Owner/ SME": owner_val,
+            "Target Value": target_val,
+            "Status": r["Status"]
+        })
     _table_tail()
     return pd.DataFrame(updated, columns=list(df.columns))
 
@@ -496,7 +551,7 @@ if st.button("Process BRDs"):
     else:
         for f in uploads:
             process_file(f)
-        st.success(f"✅ Processed {len(uploads)} BRD{'s' if len(uploads) > 1 else ''} successfully")
+        st.success(f"✅ Processed {} BRD{} successfully".format(len(uploads), "" if len(uploads)==1 else "s"))
 
 # Render sections per BRD
 for fname, proj in st.session_state["projects"].items():
