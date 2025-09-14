@@ -24,7 +24,7 @@ if USE_OPENAI:
     try:
         from openai import OpenAI
         client = OpenAI(api_key=OPENAI_API_KEY)
-        OPENAI_MODEL = "gpt-4o-mini"   # change to gpt-4.1 if you have it
+        OPENAI_MODEL = "gpt-4o-mini"   # change if you have access to a different model
     except Exception:
         USE_OPENAI = False
 
@@ -264,10 +264,11 @@ st.markdown("""
 .chip{display:inline-block;padding:4px 10px;border-radius:999px;color:#fff;font-size:12px}
 .chip-pending{background:#9ca3af}.chip-ok{background:#16a34a}.chip-bad{background:#b91c1c}.chip-accepted{background:#059669}
 .cell{padding:8px 10px;border-top:1px solid #e5e7eb}
+.stButton>button{white-space:nowrap;} /* keep labels on one line */
 </style>
 """, unsafe_allow_html=True)
 
-# ============ Table rendering ============
+# ============ Table renderers ============
 def render_table(brd, df, source, key_prefix):
     if df.empty:
         st.caption(f"No {source} KPIs.")
@@ -276,7 +277,8 @@ def render_table(brd, df, source, key_prefix):
     updated_rows = []
     for i, r in df.iterrows():
         if source == "Recommended":
-            c1, c2, c3, c4, c5, c6 = st.columns([2.1, 3.3, 1.6, 1.2, 0.9, 1.8], gap="small")
+            # widen the last column so Validate/Reject don't wrap to next line
+            c1, c2, c3, c4, c5, c6 = st.columns([2.1, 3.3, 1.6, 1.2, 0.9, 2.4], gap="small")
             with c1: st.markdown(f"**{r['KPI Name']}**")
             with c2: st.markdown(r["Description"])
             with c3:
@@ -313,7 +315,7 @@ def render_table(brd, df, source, key_prefix):
             })
 
         else:  # Extracted
-            c1, c2, c3, c4, c5 = st.columns([2.1, 3.3, 1.2, 0.9, 1.8], gap="small")
+            c1, c2, c3, c4, c5 = st.columns([2.1, 3.3, 1.2, 0.9, 2.4], gap="small")
             with c1: st.markdown(f"**{r['KPI Name']}**")
             with c2: st.markdown(r["Description"])
             with c3:
@@ -345,6 +347,53 @@ def render_table(brd, df, source, key_prefix):
             })
 
     return pd.DataFrame(updated_rows)
+
+def render_finalized_table(brd: str):
+    df = _ensure_final_df(brd).copy()
+    if df.empty:
+        st.caption("No validated KPIs yet.")
+        return
+
+    for i, r in df.iterrows():
+        # Same 6-column layout as Recommended
+        c1, c2, c3, c4, c5, c6 = st.columns([2.1, 3.3, 1.6, 1.2, 0.9, 2.4], gap="small")
+        with c1: st.markdown(f"**{r['KPI Name']}**")
+        with c2: st.markdown(r["Description"])
+        with c3:
+            owner_val = st.text_input("",
+                                      value=r.get("Owner/ SME",""),
+                                      key=f"final_owner_{brd}_{i}",
+                                      label_visibility="collapsed",
+                                      placeholder="Owner / SME")
+        with c4:
+            target_val = st.text_input("",
+                                       value=r.get("Target Value",""),
+                                       key=f"final_target_{brd}_{i}",
+                                       label_visibility="collapsed",
+                                       placeholder="Target")
+        with c5:
+            st.markdown(_chip(r.get("Status","Validated")), unsafe_allow_html=True)
+        with c6:
+            b1, b2 = st.columns(2, gap="small")
+            with b1:
+                if r.get("Status") != "Accepted":
+                    if st.button("Accept", key=f"accept_{brd}_{i}"):
+                        # update owner/target and status
+                        df.at[i, "Owner/ SME"] = owner_val.strip()
+                        df.at[i, "Target Value"] = target_val.strip()
+                        df.at[i, "Status"] = "Accepted"
+                        st.session_state["final_kpis"][brd] = df
+                        st.rerun()
+                else:
+                    st.button("Accepted", key=f"accepted_{brd}_{i}", disabled=True)
+            with b2:
+                if st.button("Remove", key=f"remove_{brd}_{i}"):
+                    _remove_from_final(brd, r["KPI Name"])
+                    st.rerun()
+        # persist edits without needing Accept
+        df.at[i, "Owner/ SME"] = owner_val
+        df.at[i, "Target Value"] = target_val
+    st.session_state["final_kpis"][brd] = df
 
 # ============ Login ============
 def login_page():
@@ -404,25 +453,4 @@ for fname, proj in st.session_state.projects.items():
     proj["recommended"] = render_table(fname, proj["recommended"], "Recommended", key_prefix=f"rec_{fname}")
 
     st.subheader("Finalized KPIs")
-    final_df = _ensure_final_df(fname)
-    if final_df.empty:
-        st.caption("No validated KPIs yet.")
-    else:
-        # per-row display with Review & Accept
-        for i, row in final_df.iterrows():
-            name = row["KPI Name"]
-            desc = row["Description"]
-            owner = row.get("Owner/ SME","")
-            target = row.get("Target Value","")
-            status = row.get("Status","Validated") or "Validated"
-
-            st.markdown(f"**{name}** — {desc}")
-            st.markdown(f"Owner/ SME: {owner or '—'} | Target: {target or '—'} | {_chip(status)}",
-                        unsafe_allow_html=True)
-
-            if status != "Accepted":
-                if st.button("Review & Accept", key=f"accept_{fname}_{i}"):
-                    final_df.at[i, "Status"] = "Accepted"
-                    st.session_state["final_kpis"][fname] = final_df
-                    st.success(f"✅ {name} accepted.")
-            st.divider()
+    render_finalized_table(fname)
