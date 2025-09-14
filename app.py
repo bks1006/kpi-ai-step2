@@ -97,7 +97,7 @@ st.markdown(
     .btn-wrap.on-reject   button { background:var(--red)!important;   color:#fff!important; }
     .btn-wrap button:hover { filter:brightness(0.96); }
 
-    /* FORCE "Review & Accept" button styling */
+    /* FORCE "Review & Accept" button styling (robust to Streamlit wrappers) */
     .accept-btn button,
     .accept-btn .stButton button,
     div.accept-btn > div > div > button {
@@ -196,14 +196,14 @@ def read_text_from_bytes(data: bytes, name: str) -> str:
 def read_uploaded(file) -> str:
     return read_text_from_bytes(file.read(), file.name)
 
-# ---------- Minimal extraction / recommendation ----------
+# ---------- Extraction / Recommendation ----------
 def extract_kpis(text: str) -> pd.DataFrame:
     rows = []
     low = text.lower()
     if "attrition" in low or "retention" in low:
         rows.append({
             "KPI Name":"Voluntary Attrition Rate",
-            "Description":"Track voluntary attrition and target a 10% reduction in 12 months.",
+            "Description":"Track voluntary attrition; target a 10% reduction in 12 months.",
             "Target Value":"10% reduction in 12 months",
             "Status":"Pending"
         })
@@ -218,11 +218,11 @@ def extract_kpis(text: str) -> pd.DataFrame:
 def recommend(domain: str, existing: list, topic: str = None, raw_text: str = "") -> list:
     pool = [
         ("Involuntary Attrition Rate",
-         "Measure attrition due to terminations or layoffs; track trend vs. prior quarter."),
+         "Attrition due to terminations/layoffs; compare to prior quarter; split by org."),
         ("Employee Retention Rate",
-         "Percentage of employees retained over a period; segment by department and tenure."),
+         "Percent of employees retained year-over-year; slice by department and tenure."),
         ("First Year Attrition Rate",
-         "Attrition within the first 12 months; highlight onboarding or hiring quality issues.")
+         "Attrition within first 12 months; signals onboarding or hiring quality issues.")
     ]
     return [
         {"KPI Name": k, "Description": d, "Owner/ SME": "", "Target Value": "", "Status": "Pending"}
@@ -241,7 +241,133 @@ def _table_head(col_template: str, headers: list[str]):
 def _table_tail():
     st.markdown("</div>", unsafe_allow_html=True)
 
-# (keep your render_extracted_table, render_recommended_table, manual_kpi_adder unchanged)
+def render_extracted_table(brd, df, key_prefix):
+    if df.empty:
+        st.caption("No extracted KPIs.")
+        return df
+    cols = "2fr 3fr 1.2fr 0.9fr 1.6fr"
+    _table_head(cols, ["KPI Name","Description","Target Value","Status","Actions"])
+
+    updated = []
+    for i, r in df.iterrows():
+        status = r["Status"]
+        c1, c2, c3, c4, c5 = st.columns([2,3,1.2,0.9,1.6])
+        with c1: st.markdown(f"<div class='cell'><b>{r['KPI Name']}</b></div>", unsafe_allow_html=True)
+        with c2: st.markdown(f"<div class='cell'>{r['Description']}</div>", unsafe_allow_html=True)
+        with c3: target_val = st.text_input("", value=r["Target Value"], key=f"{key_prefix}_t_{i}")
+        with c4: st.markdown(f"<div class='cell'>{_chip(status)}</div>", unsafe_allow_html=True)
+        with c5:
+            st.markdown("<div class='cell'>", unsafe_allow_html=True)
+            v_on  = "on-validate" if status == "Validated" else ""
+            rej_on= "on-reject"   if status == "Rejected"  else ""
+            col_v, col_r = st.columns([1,1])
+            with col_v:
+                st.markdown(f"<div class='btn-wrap {v_on}'>", unsafe_allow_html=True)
+                if st.button("Validate", key=f"{key_prefix}_ok_{i}"):
+                    status = "Validated"
+                    _upsert_final(brd, {
+                        "BRD": brd, "KPI Name": r["KPI Name"], "Source": "Extracted",
+                        "Description": r["Description"], "Owner/ SME": "", "Target Value": target_val
+                    })
+                    r["Status"] = status
+                    st.session_state["projects"][brd]["extracted"].iloc[i]["Status"] = status
+                    st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
+            with col_r:
+                st.markdown(f"<div class='btn-wrap {rej_on}'>", unsafe_allow_html=True)
+                if st.button("Reject", key=f"{key_prefix}_rej_{i}"):
+                    status = "Rejected"
+                    _remove_from_final(brd, r["KPI Name"])
+                    r["Status"] = status
+                    st.session_state["projects"][brd]["extracted"].iloc[i]["Status"] = status
+                    st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        updated.append({"KPI Name":r["KPI Name"],"Description":r["Description"],"Target Value":target_val,"Status":status})
+    _table_tail()
+    return pd.DataFrame(updated, columns=list(df.columns))
+
+def render_recommended_table(brd, df, key_prefix):
+    if df.empty:
+        st.caption("No recommended KPIs.")
+        return df
+    cols = "2fr 2.5fr 1fr 1fr 0.9fr 1.6fr"
+    _table_head(cols, ["KPI Name","Description","Owner/ SME","Target Value","Status","Actions"])
+
+    updated = []
+    for i, r in df.iterrows():
+        status = r["Status"]
+        c1,c2,c3,c4,c5,c6 = st.columns([2,2.5,1,1,0.9,1.6])
+        with c1: st.markdown(f"<div class='cell'><b>{r['KPI Name']}</b></div>", unsafe_allow_html=True)
+        with c2: st.markdown(f"<div class='cell'>{r['Description']}</div>", unsafe_allow_html=True)
+        with c3: owner_val  = st.text_input("", value=r.get("Owner/ SME",""), key=f"{key_prefix}_o_{i}")
+        with c4: target_val = st.text_input("", value=r.get("Target Value",""), key=f"{key_prefix}_t_{i}")
+        with c5: st.markdown(f"<div class='cell'>{_chip(status)}</div>", unsafe_allow_html=True)
+        with c6:
+            st.markdown("<div class='cell'>", unsafe_allow_html=True)
+            v_on  = "on-validate" if status == "Validated" else ""
+            rej_on= "on-reject"   if status == "Rejected"  else ""
+            col_v, col_r = st.columns([1,1])
+            with col_v:
+                st.markdown(f"<div class='btn-wrap {v_on}'>", unsafe_allow_html=True)
+                if st.button("Validate", key=f"{key_prefix}_ok_{i}"):
+                    status = "Validated"
+                    _upsert_final(brd, {
+                        "BRD": brd, "KPI Name": r["KPI Name"], "Source": "Recommended",
+                        "Description": r["Description"], "Owner/ SME": owner_val, "Target Value": target_val
+                    })
+                    r["Status"] = status
+                    st.session_state["projects"][brd]["recommended"].iloc[i]["Status"] = status
+                    st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
+            with col_r:
+                st.markdown(f"<div class='btn-wrap {rej_on}'>", unsafe_allow_html=True)
+                if st.button("Reject", key=f"{key_prefix}_rej_{i}"):
+                    status = "Rejected"
+                    _remove_from_final(brd, r["KPI Name"])
+                    r["Status"] = status
+                    st.session_state["projects"][brd]["recommended"].iloc[i]["Status"] = status
+                    st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        updated.append({
+            "KPI Name":r["KPI Name"], "Description":r["Description"],
+            "Owner/ SME":owner_val, "Target Value":target_val, "Status":status
+        })
+    _table_tail()
+    return pd.DataFrame(updated, columns=list(df.columns))
+
+def manual_kpi_adder(brd):
+    st.markdown("#### Add KPI manually")
+    with st.form(key=f"manual_add_{brd}", clear_on_submit=True):
+        kpi_name = st.text_input("KPI Name *", value="")
+        c3, c4 = st.columns([1,1])
+        owner    = c3.text_input("Owner/ SME", value="")
+        target   = c4.text_input("Target Value", value="")
+        add = st.form_submit_button("Add KPI")
+    if add:
+        if not kpi_name.strip():
+            st.warning("Please enter a KPI Name.")
+            return
+        rec_df = st.session_state["projects"][brd]["recommended"]
+        ext_df = st.session_state["projects"][brd]["extracted"]
+        all_names = set(n.lower() for n in pd.concat([rec_df["KPI Name"], ext_df["KPI Name"]], ignore_index=True).astype(str))
+        if kpi_name.strip().lower() in all_names:
+            st.warning("KPI already exists in this BRD.")
+            return
+        new_row = {
+            "KPI Name": kpi_name.strip(),
+            "Description": f"Auto-generated description for {kpi_name.strip()}",
+            "Owner/ SME": owner.strip(),
+            "Target Value": target.strip(),
+            "Status": "Pending",
+        }
+        rec_df = pd.concat([rec_df, pd.DataFrame([new_row])], ignore_index=True)
+        st.session_state["projects"][brd]["recommended"] = rec_df
+        st.success("KPI added to Recommended.")
+        st.rerun()
 
 # ---------- Pipeline ----------
 def process_file(file):
