@@ -54,7 +54,7 @@ st.markdown(
     .chip-ok{ background:#16a34a;}
     .chip-bad{ background:#b91c1c;}
 
-    /* Default brand inputs across the app */
+    /* Global brand inputs */
     .stTextInput > div > div > input,
     .stTextArea  > div > div > textarea,
     .stSelectbox > div > div > select {
@@ -67,18 +67,20 @@ st.markdown(
       border:2px solid var(--brand) !important; box-shadow:0 0 6px var(--brand) !important; outline:none !important;
     }
 
-    /* But on the login page, use neutral borders */
+    /* LOGIN: neutral border by default, red on focus (so it highlights properly) */
     .login-card .stTextInput > div > div > input,
     .login-card .stPasswordInput > div > div > input {
       border:1px solid #d1d5db !important;
       box-shadow:none !important;
       outline:none !important;
       border-radius:8px !important;
+      background:#fff !important;
     }
     .login-card .stTextInput > div > div > input:focus,
     .login-card .stPasswordInput > div > div > input:focus {
-      border:1px solid #9ca3af !important;
-      box-shadow:none !important;
+      border:2px solid var(--brand) !important;
+      box-shadow:0 0 6px var(--brand) !important;
+      outline:none !important;
     }
 
     /* Validate/Reject highlight AFTER action */
@@ -86,22 +88,24 @@ st.markdown(
     .btn-wrap.on-reject   button { background:var(--red)!important;   color:#fff!important; }
     .btn-wrap button:hover { filter:brightness(0.96); }
 
-    /* Only Review & Accept should be red — scoped wrapper */
-    .accept-btn button {
+    /* >>> FORCE the "Review & Accept" button to be red with white text <<< */
+    .accept-btn .stButton>button {
         background-color: var(--brand) !important;
         color: white !important;
         border: none !important;
         border-radius: 6px !important;
         padding: 0.6rem 1.2rem !important;
         font-weight: 600 !important;
+        box-shadow: none !important;
     }
-    .accept-btn button:hover { filter: brightness(0.9); }
+    .accept-btn .stButton>button:hover { filter: brightness(0.9); }
 
     .centered { display:flex; justify-content:center; }
     </style>
     """,
     unsafe_allow_html=True
 )
+
 
 # ---------- Session defaults ----------
 if "auth" not in st.session_state:
@@ -438,3 +442,4 @@ for fname, proj in st.session_state.projects.items():
             if st.button("Review & Accept", key=f"accept_{fname}"):
                 st.success("✅ Finalized KPIs have been accepted successfully!")
             st.markdown("</div>", unsafe_allow_html=True)
+
