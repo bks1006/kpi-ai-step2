@@ -30,7 +30,7 @@ st.markdown(
     :root { --brand:#b91c1c; --green:#16a34a; --red:#b91c1c; }
     .block-container { padding-top: 1.0rem; }
 
-    /* Fixed top bar */
+    /* Sticky top bar */
     .topbar {
       position: sticky; top: 0; z-index: 5;
       background: white; padding: 6px 0 8px 0; margin-bottom: 4px;
@@ -54,7 +54,7 @@ st.markdown(
     .chip-ok{ background:#16a34a;}
     .chip-bad{ background:#b91c1c;}
 
-    /* Input borders (brand red) */
+    /* Default brand inputs across the app */
     .stTextInput > div > div > input,
     .stTextArea  > div > div > textarea,
     .stSelectbox > div > div > select {
@@ -67,12 +67,26 @@ st.markdown(
       border:2px solid var(--brand) !important; box-shadow:0 0 6px var(--brand) !important; outline:none !important;
     }
 
+    /* But on the login page, use neutral borders */
+    .login-card .stTextInput > div > div > input,
+    .login-card .stPasswordInput > div > div > input {
+      border:1px solid #d1d5db !important;
+      box-shadow:none !important;
+      outline:none !important;
+      border-radius:8px !important;
+    }
+    .login-card .stTextInput > div > div > input:focus,
+    .login-card .stPasswordInput > div > div > input:focus {
+      border:1px solid #9ca3af !important;
+      box-shadow:none !important;
+    }
+
     /* Validate/Reject highlight AFTER action */
     .btn-wrap.on-validate button { background:var(--green)!important; color:#fff!important; }
     .btn-wrap.on-reject   button { background:var(--red)!important;   color:#fff!important; }
     .btn-wrap button:hover { filter:brightness(0.96); }
 
-    /* Only Review & Accept should be red */
+    /* Only Review & Accept should be red — scoped wrapper */
     .accept-btn button {
         background-color: var(--brand) !important;
         color: white !important;
@@ -348,10 +362,11 @@ def process_file(file):
     )
 
 # ---------- Login ----------
-def render_login():
+def login_page():
     st.markdown("<h2 style='color:#b91c1c;text-align:center'>AI KPI System</h2>", unsafe_allow_html=True)
     col = st.columns([1,2,1])[1]
     with col:
+        st.markdown("<div class='login-card'>", unsafe_allow_html=True)
         st.write("Sign in to continue")
         email = st.text_input("Email")
         password = st.text_input("Password", type="password")
@@ -362,12 +377,13 @@ def render_login():
                 st.rerun()
             else:
                 st.error("Invalid email or password")
+        st.markdown("</div>", unsafe_allow_html=True)
 
 # ======================
 #        MAIN
 # ======================
 if not st.session_state["auth"]:
-    render_login()
+    login_page()
     st.stop()
 
 # --- Top bar ---
@@ -375,8 +391,9 @@ st.markdown("<div class='topbar'><div class='topbar-inner'>"
             f"<div class='who'>Signed in as <b>{st.session_state.get('user','')}</b></div>"
             "</div></div>",
             unsafe_allow_html=True)
-top_c1, top_c2, top_c3 = st.columns([9,1,1])
-with top_c3:
+
+left, spacer, right = st.columns([9,1,1])
+with right:
     if st.button("Log out"):
         for k in ["auth", "user", "projects", "final_kpis"]:
             if k in st.session_state: del st.session_state[k]
@@ -414,7 +431,7 @@ for fname, proj in st.session_state.projects.items():
         show = final_df[["KPI Name","Source","Owner/ SME","Target Value","Description"]].sort_values("KPI Name")
         st.dataframe(show, use_container_width=True, hide_index=True)
 
-        # --- Centered red "Review & Accept" button (scoped styling) ---
+        # Centered red "Review & Accept" button (scoped styling)
         csp1, csp2, csp3 = st.columns([1,2,1])
         with csp2:
             st.markdown("<div class='centered accept-btn'>", unsafe_allow_html=True)
