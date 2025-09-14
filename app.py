@@ -90,7 +90,7 @@ st.markdown(
 
     /* >>> FORCE the "Review & Accept" button to be red with white text <<< */
     .accept-btn .stButton>button {
-        background-color: var(--brand) !important;
+        background-color: red !important;
         color: white !important;
         border: none !important;
         border-radius: 6px !important;
@@ -442,4 +442,5 @@ for fname, proj in st.session_state.projects.items():
             if st.button("Review & Accept", key=f"accept_{fname}"):
                 st.success("✅ Finalized KPIs have been accepted successfully!")
             st.markdown("</div>", unsafe_allow_html=True)
+
 
