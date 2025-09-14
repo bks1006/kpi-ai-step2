@@ -9,6 +9,9 @@ import streamlit as st
 
 from pypdf import PdfReader
 from docx import Document as DocxDocument
+from openai import OpenAI
+client = OpenAI(api_key=OPENAI_API_KEY)
+
 
 # ---------- OCR fallback ----------
 try:
@@ -624,3 +627,4 @@ for fname, proj in st.session_state.projects.items():
             if st.button("Review & Accept", key=f"accept_{fname}"):
                 st.success("✅ Finalized KPIs have been accepted successfully!")
             st.markdown("</div>", unsafe_allow_html=True)
+
