@@ -1,8 +1,8 @@
 streamlit
-pandas
 pypdf
 python-docx
 rapidfuzz
 pdf2image
 pytesseract
 Pillow
+bcrypt
