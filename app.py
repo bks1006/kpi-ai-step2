@@ -28,7 +28,18 @@ st.markdown(
     """
     <style>
     :root { --brand:#b91c1c; --green:#16a34a; --red:#b91c1c; }
-    .block-container { padding-top: 1.2rem; }
+    .block-container { padding-top: 1.0rem; }
+
+    /* Fixed top bar */
+    .topbar {
+      position: sticky; top: 0; z-index: 5;
+      background: white; padding: 6px 0 8px 0; margin-bottom: 4px;
+      border-bottom: 1px solid #eee;
+    }
+    .topbar-inner { display:flex; justify-content:space-between; align-items:center; }
+    .who { color:#6b7280; font-size:14px; }
+
+    /* Table header & body */
     .th-row {
       background:#f3f4f6; border:1px solid #e5e7eb; border-bottom:0;
       padding:10px 12px; border-radius:10px 10px 0 0; font-weight:700;
@@ -37,6 +48,7 @@ st.markdown(
     .tb { border:1px solid #e5e7eb; border-top:0; border-radius:0 0 10px 10px; }
     .cell { padding:10px 12px; border-top:1px solid #e5e7eb; }
 
+    /* Status chips */
     .chip { display:inline-block; padding:4px 10px; border-radius:999px; color:#fff; font-size:12px;}
     .chip-pending{ background:#9ca3af;}
     .chip-ok{ background:#16a34a;}
@@ -55,14 +67,10 @@ st.markdown(
       border:2px solid var(--brand) !important; box-shadow:0 0 6px var(--brand) !important; outline:none !important;
     }
 
-    /* inline action buttons that colorize by status */
+    /* inline buttons colored by status */
     .btn-wrap.on-validate button { background:var(--green)!important; border-color:var(--green)!important; color:#fff!important; }
     .btn-wrap.on-reject   button { background:var(--red)!important;   border-color:var(--red)!important;   color:#fff!important; }
     .btn-wrap button:hover { filter:brightness(0.96); }
-
-    /* top bar */
-    .topbar { display:flex; justify-content:flex-end; align-items:center; gap:14px; }
-    .topbar .who { color:#6b7280; font-size:14px; }
     </style>
     """,
     unsafe_allow_html=True
@@ -191,35 +199,43 @@ def render_extracted_table(brd, df, key_prefix):
 
     updated = []
     for i, r in df.iterrows():
+        # Compute status before rendering, but re-render immediately on click
+        status = r["Status"]
         c1, c2, c3, c4, c5 = st.columns([2,3,1.2,0.9,1.6])
         with c1: st.markdown(f"<div class='cell'><b>{r['KPI Name']}</b></div>", unsafe_allow_html=True)
         with c2: st.markdown(f"<div class='cell'>{r['Description']}</div>", unsafe_allow_html=True)
-        with c3:
-            target_val = st.text_input("", value=r["Target Value"], key=f"{key_prefix}_t_{i}")
-        with c4:
-            st.markdown(f"<div class='cell'>{_chip(r['Status'])}</div>", unsafe_allow_html=True)
+        with c3: target_val = st.text_input("", value=r["Target Value"], key=f"{key_prefix}_t_{i}")
+        with c4: st.markdown(f"<div class='cell'>{_chip(status)}</div>", unsafe_allow_html=True)
         with c5:
             st.markdown("<div class='cell'>", unsafe_allow_html=True)
-            v_on  = "on-validate" if r["Status"] == "Validated" else ""
-            rej_on= "on-reject"   if r["Status"] == "Rejected"  else ""
+            v_on  = "on-validate" if status == "Validated" else ""
+            rej_on= "on-reject"   if status == "Rejected"  else ""
             col_v, col_r = st.columns([1,1])
             with col_v:
                 st.markdown(f"<div class='btn-wrap {v_on}'>", unsafe_allow_html=True)
                 if st.button("Validate", key=f"{key_prefix}_ok_{i}"):
-                    r["Status"] = "Validated"
+                    # update state & final KPIs then re-render immediately
+                    status = "Validated"
                     _upsert_final(brd, {
                         "BRD": brd, "KPI Name": r["KPI Name"], "Source": "Extracted",
                         "Description": r["Description"], "Owner/ SME": "", "Target Value": target_val
                     })
+                    r["Status"] = status
+                    st.session_state["projects"][brd]["extracted"].iloc[i]["Status"] = status
+                    st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
             with col_r:
                 st.markdown(f"<div class='btn-wrap {rej_on}'>", unsafe_allow_html=True)
                 if st.button("Reject", key=f"{key_prefix}_rej_{i}"):
-                    r["Status"] = "Rejected"
+                    status = "Rejected"
                     _remove_from_final(brd, r["KPI Name"])
+                    r["Status"] = status
+                    st.session_state["projects"][brd]["extracted"].iloc[i]["Status"] = status
+                    st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
             st.markdown("</div>", unsafe_allow_html=True)
-        updated.append({"KPI Name":r["KPI Name"],"Description":r["Description"],"Target Value":target_val,"Status":r["Status"]})
+
+        updated.append({"KPI Name":r["KPI Name"],"Description":r["Description"],"Target Value":target_val,"Status":status})
     _table_tail()
     return pd.DataFrame(updated, columns=list(df.columns))
 
@@ -232,36 +248,44 @@ def render_recommended_table(brd, df, key_prefix):
 
     updated = []
     for i, r in df.iterrows():
+        status = r["Status"]
         c1,c2,c3,c4,c5,c6 = st.columns([2,2.5,1,1,0.9,1.6])
         with c1: st.markdown(f"<div class='cell'><b>{r['KPI Name']}</b></div>", unsafe_allow_html=True)
         with c2: st.markdown(f"<div class='cell'>{r['Description']}</div>", unsafe_allow_html=True)
         with c3: owner_val  = st.text_input("", value=r.get("Owner/ SME",""), key=f"{key_prefix}_o_{i}")
         with c4: target_val = st.text_input("", value=r.get("Target Value",""), key=f"{key_prefix}_t_{i}")
-        with c5: st.markdown(f"<div class='cell'>{_chip(r['Status'])}</div>", unsafe_allow_html=True)
+        with c5: st.markdown(f"<div class='cell'>{_chip(status)}</div>", unsafe_allow_html=True)
         with c6:
             st.markdown("<div class='cell'>", unsafe_allow_html=True)
-            v_on  = "on-validate" if r["Status"] == "Validated" else ""
-            rej_on= "on-reject"   if r["Status"] == "Rejected"  else ""
+            v_on  = "on-validate" if status == "Validated" else ""
+            rej_on= "on-reject"   if status == "Rejected"  else ""
             col_v, col_r = st.columns([1,1])
             with col_v:
                 st.markdown(f"<div class='btn-wrap {v_on}'>", unsafe_allow_html=True)
                 if st.button("Validate", key=f"{key_prefix}_ok_{i}"):
-                    r["Status"] = "Validated"
+                    status = "Validated"
                     _upsert_final(brd, {
                         "BRD": brd, "KPI Name": r["KPI Name"], "Source": "Recommended",
                         "Description": r["Description"], "Owner/ SME": owner_val, "Target Value": target_val
                     })
+                    r["Status"] = status
+                    st.session_state["projects"][brd]["recommended"].iloc[i]["Status"] = status
+                    st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
             with col_r:
                 st.markdown(f"<div class='btn-wrap {rej_on}'>", unsafe_allow_html=True)
                 if st.button("Reject", key=f"{key_prefix}_rej_{i}"):
-                    r["Status"] = "Rejected"
+                    status = "Rejected"
                     _remove_from_final(brd, r["KPI Name"])
+                    r["Status"] = status
+                    st.session_state["projects"][brd]["recommended"].iloc[i]["Status"] = status
+                    st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
             st.markdown("</div>", unsafe_allow_html=True)
+
         updated.append({
             "KPI Name":r["KPI Name"], "Description":r["Description"],
-            "Owner/ SME":owner_val, "Target Value":target_val, "Status":r["Status"]
+            "Owner/ SME":owner_val, "Target Value":target_val, "Status":status
         })
     _table_tail()
     return pd.DataFrame(updated, columns=list(df.columns))
@@ -335,20 +359,21 @@ if not st.session_state["auth"]:
     render_login()
     st.stop()
 
-# --- top-right header bar (small logout) ---
-with st.container():
-    c1, c2 = st.columns([8,1])
-    with c1:
-        st.markdown(
-            f"<div class='topbar' style='justify-content:flex-start'><span class='who'>Signed in as "
-            f"<b>{st.session_state.get('user','')}</b></span></div>", unsafe_allow_html=True
-        )
-    with c2:
-        # small logout button on the right
-        if st.button("Log out"):
-            for k in ["auth", "user", "projects", "final_kpis"]:
-                if k in st.session_state: del st.session_state[k]
-            st.rerun()
+# --- Top bar with logout on the right ---
+st.markdown("<div class='topbar'><div class='topbar-inner'>"
+            f"<div class='who'>Signed in as <b>{st.session_state.get('user','')}</b></div>"
+            "</div></div>",
+            unsafe_allow_html=True)
+
+# Place the logout button aligned right by using columns
+top_c1, top_c2, top_c3 = st.columns([9,1,1])
+with top_c2:
+    pass
+with top_c3:
+    if st.button("Log out"):
+        for k in ["auth", "user", "projects", "final_kpis"]:
+            if k in st.session_state: del st.session_state[k]
+        st.rerun()
 
 st.title("AI KPI Extraction & Recommendations (Per BRD)")
 
