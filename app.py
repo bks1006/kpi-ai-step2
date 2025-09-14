@@ -20,10 +20,10 @@ VALID_USERS = {
     "user@company.com": "welcome123"
 }
 
-# ---------- Streamlit page setup ----------
+# ---------- Page setup ----------
 st.set_page_config(page_title="AI KPI System", layout="wide")
 
-# ---------- Global red/white theme & button coloring ----------
+# ---------- Styles (red/white theme; fixed top bar; colored action buttons) ----------
 st.markdown(
     """
     <style>
@@ -71,6 +71,17 @@ st.markdown(
     .btn-wrap.on-validate button { background:var(--green)!important; border-color:var(--green)!important; color:#fff!important; }
     .btn-wrap.on-reject   button { background:var(--red)!important;   border-color:var(--red)!important;   color:#fff!important; }
     .btn-wrap button:hover { filter:brightness(0.96); }
+
+    /* Review & Accept (red) */
+    .red-btn button {
+        background-color: #b91c1c !important;
+        color: white !important;
+        border: none !important;
+        border-radius: 6px !important;
+        padding: 0.6rem 1.2rem !important;
+        font-weight: 600 !important;
+    }
+    .red-btn button:hover { filter: brightness(0.9); }
     </style>
     """,
     unsafe_allow_html=True
@@ -178,7 +189,7 @@ def recommend(domain: str, existing: list, topic: str = None, raw_text: str = ""
     pool = ["Involuntary Attrition Rate", "Employee Retention Rate", "First Year Attrition Rate"]
     return [k for k in pool if k not in existing]
 
-# ---------- Render helpers ----------
+# ---------- Table helpers ----------
 def _table_head(col_template: str, headers: list[str]):
     st.markdown(
         f"<div class='th-row' style='grid-template-columns:{col_template};'>" +
@@ -199,7 +210,6 @@ def render_extracted_table(brd, df, key_prefix):
 
     updated = []
     for i, r in df.iterrows():
-        # Compute status before rendering, but re-render immediately on click
         status = r["Status"]
         c1, c2, c3, c4, c5 = st.columns([2,3,1.2,0.9,1.6])
         with c1: st.markdown(f"<div class='cell'><b>{r['KPI Name']}</b></div>", unsafe_allow_html=True)
@@ -214,7 +224,6 @@ def render_extracted_table(brd, df, key_prefix):
             with col_v:
                 st.markdown(f"<div class='btn-wrap {v_on}'>", unsafe_allow_html=True)
                 if st.button("Validate", key=f"{key_prefix}_ok_{i}"):
-                    # update state & final KPIs then re-render immediately
                     status = "Validated"
                     _upsert_final(brd, {
                         "BRD": brd, "KPI Name": r["KPI Name"], "Source": "Extracted",
@@ -364,8 +373,6 @@ st.markdown("<div class='topbar'><div class='topbar-inner'>"
             f"<div class='who'>Signed in as <b>{st.session_state.get('user','')}</b></div>"
             "</div></div>",
             unsafe_allow_html=True)
-
-# Place the logout button aligned right by using columns
 top_c1, top_c2, top_c3 = st.columns([9,1,1])
 with top_c2:
     pass
@@ -406,3 +413,9 @@ for fname, proj in st.session_state.projects.items():
     else:
         show = final_df[["KPI Name","Source","Owner/ SME","Target Value","Description"]].sort_values("KPI Name")
         st.dataframe(show, use_container_width=True, hide_index=True)
+
+        # --- Review & Accept button (red with white text) ---
+        st.markdown("<div class='red-btn'>", unsafe_allow_html=True)
+        if st.button(f"Review & Accept {fname}", key=f"accept_{fname}"):
+            st.success(f"✅ Finalized KPIs for **{fname}** have been accepted!")
+        st.markdown("</div>", unsafe_allow_html=True)
