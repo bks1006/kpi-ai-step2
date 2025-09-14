@@ -1,5 +1,4 @@
-# app.py
-import io, re, bcrypt
+import io, re
 import pandas as pd
 import streamlit as st
 
@@ -7,7 +6,7 @@ from pypdf import PdfReader
 from docx import Document as DocxDocument
 from rapidfuzz import fuzz, process
 
-# ---------- OCR fallback (auto-ignored if binaries missing) ----------
+# ---------- OCR fallback ----------
 try:
     from pdf2image import convert_from_bytes
     import pytesseract
@@ -16,198 +15,40 @@ try:
 except Exception:
     OCR_AVAILABLE = False
 
-# ---------- Global page config ----------
+# ---------- Demo credentials ----------
+VALID_USERS = {
+    "admin@company.com": "password123",
+    "user@company.com": "welcome123"
+}
+
+# ---------- Streamlit page setup ----------
 st.set_page_config(page_title="AI KPI System", layout="wide")
 
-# =========================
-#  AUTH / SIGN-IN GATE
-# =========================
-
-# Prefer users from Streamlit Secrets; otherwise fall back to demo + admin
-USERS = dict(st.secrets.get("users", {}))
-if not USERS:
-    USERS = {
-        "demo@local": bcrypt.hashpw(b"demo123", bcrypt.gensalt()).decode(),
-        "admin@company.com": bcrypt.hashpw(b"admin123", bcrypt.gensalt()).decode(),
-    }
-
-def _check_credentials(username: str, password: str) -> bool:
-    if not username or not password:
-        return False
-    u = username.strip().lower()
-    h = USERS.get(u)
-    if not h:
-        return False
-    try:
-        return bcrypt.checkpw(password.encode(), h.encode())
-    except Exception:
-        return False
-
-def render_login():
-    # --- Styles for card and input highlighting ---
-    st.markdown(
-        """
-        <style>
-        .login-card {
-            max-width: 480px; margin: 10vh auto 0 auto; padding: 28px 28px 22px 28px;
-            border: 1px solid #e5e7eb; border-radius: 14px; background: #ffffff;
-            box-shadow: 0 6px 18px rgba(0,0,0,0.06);
-        }
-        .brand { color:#b91c1c; font-weight:800; font-size: 22px; letter-spacing: .2px; margin-bottom: 4px; }
-
-        /* Default grey border */
-        .stTextInput > div > div > input {
-          border: 2px solid #d1d5db !important;
-          border-radius: 6px !important;
-          padding: 6px 8px !important;
-          background: #fff !important;
-        }
-        /* Red for invalid, Green for valid (we toggle these classes via JS) */
-        .stTextInput.input-error > div > div > input { border: 2px solid #dc2626 !important; }
-        .stTextInput.input-success > div > div > input { border: 2px solid #16a34a !important; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown("<div class='login-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='brand'>AI KPI System</div>", unsafe_allow_html=True)
-    st.write("Sign in to continue")
-
-    email = st.text_input("Email", key="login_email")
-    password = st.text_input("Password", type="password", key="login_password")
-
-    # Live validation flags
-    email_valid = bool(email.strip()) and (email.strip().lower() in USERS)
-    password_valid = False
-    if email.strip() and password:
-        h = USERS.get(email.strip().lower())
-        if h:
-            try:
-                password_valid = bcrypt.checkpw(password.encode(), h.encode())
-            except Exception:
-                password_valid = False
-
-    # Inject JS to toggle classes on the two input widgets
-    st.markdown(
-        f"""
-        <script>
-        (function() {{
-          const labels = window.parent.document.querySelectorAll('label');
-          let emailWrap = null, pwdWrap = null;
-
-          labels.forEach(l => {{
-            const t = (l.innerText || '').trim().toLowerCase();
-            if(t === 'email') emailWrap = l.closest('.stTextInput');
-            if(t === 'password') pwdWrap = l.closest('.stTextInput');
-          }});
-
-          function setState(el, state) {{
-            if(!el) return;
-            el.classList.remove('input-error','input-success');
-            if(state === 'error') el.classList.add('input-error');
-            if(state === 'success') el.classList.add('input-success');
-          }}
-
-          const emailState = {'"success"' if email_valid else ('"error"' if email.strip() else 'null')};
-          const pwdState = {'"success"' if password_valid else ('"error"' if password else 'null')};
-
-          setState(emailWrap, emailState);
-          setState(pwdWrap, pwdState);
-        }})();
-        </script>
-        """,
-        unsafe_allow_html=True
-    )
-
-    if st.button("Sign in"):
-        if _check_credentials(email, password):
-            st.session_state["auth"] = True
-            st.session_state["user"] = email.strip().lower()
-            st.success("Signed in successfully")
-            st.experimental_rerun()
-        else:
-            st.error("Invalid email or password")
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-# Gate the app
-if not st.session_state.get("auth"):
-    render_login()
-    st.stop()
-
-# Sidebar logout
-with st.sidebar:
-    st.caption(f"Signed in as **{st.session_state.get('user','')}**")
-    if st.button("Log out"):
-        for k in ["auth", "user", "projects", "final_kpis"]:
-            if k in st.session_state: del st.session_state[k]
-        st.experimental_rerun()
-
-# =========================
-#  KPI APP
-# =========================
-
-st.title("AI KPI Extraction & Recommendations (Per BRD)")
-
-# ---------- Theme (red + white) ----------
-st.markdown(
-    """
-    <style>
-    :root { --brand:#b91c1c; }
-    .stTextInput>div>div>input, .stSelectbox>div>div>select, textarea.stTextArea {
-        border:1.5px solid var(--brand) !important; border-radius:6px !important; background:#fff !important;
-    }
-    .stTextInput>div>div>input:focus, .stSelectbox>div>div>select:focus, textarea.stTextArea:focus {
-        border:2px solid var(--brand) !important; outline:none !important; box-shadow:0 0 5px var(--brand) !important;
-    }
-
-    .kpi-header { background:#b91c1c; color:#fff; padding:10px 12px; border-radius:8px 8px 0 0; font-weight:700; }
-    .table-head { background:#f8fafc; border:1px solid #f1f5f9; border-bottom:0; border-radius:8px 8px 0 0; padding:8px 12px; font-weight:700; }
-    .table-body { border:1px solid #f1f5f9; border-top:0; border-radius:0 0 8px 8px; }
-    .cell { padding:10px 12px; border-top:1px solid #f1f5f9; }
-
-    .badge { display:inline-block; padding:3px 8px; border-radius:999px; font-size:12px; color:#fff; }
-    .badge-pending { background:#9ca3af; }
-    .badge-validated { background:#16a34a; }
-    .badge-rejected { background:#b91c1c; }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
-# ---------- Session ----------
+# ---------- Session defaults ----------
+if "auth" not in st.session_state:
+    st.session_state["auth"] = False
+if "user" not in st.session_state:
+    st.session_state["user"] = None
 if "projects" not in st.session_state:
-    st.session_state["projects"] = {}     # {brd: {...}}
+    st.session_state["projects"] = {}
 if "final_kpis" not in st.session_state:
-    st.session_state["final_kpis"] = {}   # brd -> DataFrame
+    st.session_state["final_kpis"] = {}
 
-def _status_badge(s):
-    cls = "badge-pending"
-    if s == "Validated": cls = "badge-validated"
-    elif s == "Rejected": cls = "badge-rejected"
-    return f"<span class='badge {cls}'>{s}</span>"
+# ---------- Utils ----------
+STATUS_COLORS = {"Validated": "#16a34a", "Rejected": "#dc2626", "Pending": "#9ca3af"}
 
-def _upsert_final(brd, row):
-    df = st.session_state["final_kpis"].get(
-        brd,
-        pd.DataFrame(columns=["BRD","KPI Name","Source","Description","Owner/ SME","Target Value"])
-    )
-    df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
-    df.drop_duplicates(subset=["KPI Name"], keep="last", inplace=True)
-    st.session_state["final_kpis"][brd] = df
 
-def _remove_from_final(brd, kpi_name):
-    df = st.session_state["final_kpis"].get(
-        brd,
-        pd.DataFrame(columns=["BRD","KPI Name","Source","Description","Owner/ SME","Target Value"])
-    )
-    if not df.empty:
-        df = df[df["KPI Name"] != kpi_name].reset_index(drop=True)
-    st.session_state["final_kpis"][brd] = df
+def status_chip(s: str) -> str:
+    color = STATUS_COLORS.get(s, "#6b7280")
+    return f'<span style="background:{color};color:#fff;padding:2px 8px;border-radius:10px;font-size:12px">{s}</span>'
 
-# ---------- File reading (PDF + OCR, DOCX) ----------
-def read_text_from_bytes(data, name):
+
+def _check_credentials(email: str, password: str) -> bool:
+    return email.strip().lower() in VALID_USERS and VALID_USERS[email.strip().lower()] == password
+
+
+# ---------- File reading ----------
+def read_text_from_bytes(data: bytes, name: str) -> str:
     lname = name.lower()
     bio = io.BytesIO(data)
 
@@ -215,19 +56,15 @@ def read_text_from_bytes(data, name):
         try:
             reader = PdfReader(bio)
             txt = "\n".join((p.extract_text() or "") for p in reader.pages)
-            if txt and txt.strip():
+            if txt.strip():
                 return txt
         except Exception:
             pass
         if OCR_AVAILABLE:
             try:
                 imgs = convert_from_bytes(data)
-                parts = []
-                for im in imgs:
-                    t = pytesseract.image_to_string(im, lang="eng")
-                    if t and t.strip():
-                        parts.append(t)
-                return "\n".join(parts)
+                parts = [pytesseract.image_to_string(im, lang="eng") for im in imgs]
+                return "\n".join(p for p in parts if p.strip())
             except Exception:
                 return ""
         return ""
@@ -237,15 +74,12 @@ def read_text_from_bytes(data, name):
             doc = DocxDocument(bio)
         except Exception:
             return ""
-        parts = []
-        for p in doc.paragraphs:
-            t = (p.text or "").strip()
-            if t: parts.append(t)
+        parts = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
         for tbl in doc.tables:
             for row in tbl.rows:
                 for cell in row.cells:
-                    t = (cell.text or "").strip()
-                    if t: parts.append(t)
+                    if cell.text.strip():
+                        parts.append(cell.text.strip())
         return "\n".join(parts)
 
     try:
@@ -253,424 +87,124 @@ def read_text_from_bytes(data, name):
     except Exception:
         return ""
 
-def read_uploaded(file):
+
+def read_uploaded(file) -> str:
     return read_text_from_bytes(file.read(), file.name)
 
-# ---------- Domain & Topic inference ----------
-DOMAIN_HINTS = {
-    "hr": [
-        "employee","attrition","turnover","recruitment","hiring","retention",
-        "satisfaction","absenteeism","time to fill","job description","resume",
-        "cv","parsing","ats","matching","screening"
-    ],
-    "sales": ["pipeline","deal","quota","win rate","opportunity","lead"],
-    "marketing": ["campaign","cpl","cac","ctr","impressions","engagement"],
-    "finance": ["revenue","margin","cash","roi","ebitda"],
-}
-def infer_domain(text):
-    low = text.lower()
-    scores = {d: sum(low.count(k) for k in ks) for d, ks in DOMAIN_HINTS.items()}
-    d = max(scores, key=scores.get)
-    return d if scores[d] > 0 else "hr"
 
-HR_TOPIC_KEYWORDS = {
-    "attrition_retention": ["attrition","turnover","retention","churn","stay interview","exit interview"],
-    "jd_ats": ["job description","jd","resume","cv","parsing","ats","matching","skills extraction","screening","latency","concurrent users"],
-    "workforce_planning": ["headcount","workforce planning","manpower","capacity","utilization","vacancy","forecast"],
-    "recruiting": ["recruiting","sourcing","hiring","offer","candidate","interview","requisition"],
-    "learning_development": ["training","learning","l&d","course","skill","upskilling","certification","completion"],
-    "engagement_culture": ["engagement","enps","nps","pulse","survey","satisfaction","morale","culture","recognition"],
-}
-def infer_hr_topic(text):
-    low = text.lower()
-    best, score = None, 0
-    for topic, kws in HR_TOPIC_KEYWORDS.items():
-        s = sum(low.count(k) for k in kws)
-        if s > score:
-            best, score = topic, s
-    return best or "recruiting"
-
-# ---------- Text preprocessing ----------
-SPLIT_TOKENS = r"[•\u2022\-\–\—\·]|(?:^\s*\d+[\.\)])"
-def preprocess_text(raw):
-    lines = [l.strip() for l in raw.splitlines()]
-    fused, buf = [], ""
-    for l in lines:
-        if not l:
-            if buf: fused.append(buf.strip()); buf = ""
-            continue
-        if buf and not re.search(r"[\.!\?;:]$", buf) and not re.match(r"^\s*-\s*", l):
-            buf = f"{buf} {l}"
-        else:
-            if buf: fused.append(buf.strip())
-            buf = l
-    if buf: fused.append(buf.strip())
-
-    bullets = []
-    for chunk in fused:
-        for s in re.split(SPLIT_TOKENS, chunk):
-            s = re.sub(r"\s+", " ", s).strip(" -•:\t")
-            if s: bullets.append(s)
-
-    sents = []
-    for b in bullets:
-        for sent in re.split(r"(?<=[\.\?!])\s+(?=[A-Z])", b):
-            s = sent.strip()
-            if s: sents.append(s)
-    return sents
-
-# ---------- KPI patterns & extraction ----------
-TARGET_PERCENT = r"\b(?:<|>|≤|≥)?\s*\d{1,3}(?:\.\d+)?\s*%\b"
-TARGET_RATIO   = r"\b\d+(?:\.\d+)?\s*/\s*\d+\b"
-TARGET_TIME    = r"\b(?:in|within|by)\s+\d+\s*(?:days?|weeks?|months?|quarters?|years?)\b"
-TARGET_SECS    = r"\b\d+(?:\.\d+)?\s*(?:ms|milliseconds|s|sec|secs|seconds)\b"
-TARGET_UNDER_SECS = r"\b(?:under|within|less than|<|≤)\s*\d+(?:\.\d+)?\s*(?:ms|milliseconds|s|sec|secs|seconds)\b"
-TARGET_USERS   = r"\b\d{1,5}(?:\.\d+)?\s*(?:concurrent\s+users|users)\b"
-TARGET_GENERIC = r"(?:<|>|≤|≥)\s*\d+(?:\.\d+)?"
-
-def find_targets(s):
-    hits = []
-    for pat in (TARGET_PERCENT, TARGET_RATIO, TARGET_TIME, TARGET_UNDER_SECS, TARGET_SECS, TARGET_USERS, TARGET_GENERIC):
-        for m in re.finditer(pat, s, flags=re.I):
-            hits.append(m.group(0).strip())
-    return " | ".join(dict.fromkeys(hits))
-
-KPI_CANON = {
-    # JD/ATS & platform KPIs
-    "JD Generation Time": [
-        r"\bgenerate\b.{0,40}\bjd\b.{0,40}\b(sec|seconds|ms|milliseconds|time|latency)\b",
-        r"\bjd (generation|creation) time\b"
-    ],
-    "Bias Flag Rate": [r"\bbias (flag|detection)\b", r"\bnon[- ]inclusive language\b"],
-    "JD Tool Adoption Rate": [r"\badoption rate\b", r"\busage rate\b", r"\b% of (hiring managers|users) using\b"],
-    "JD Approval Rate": [r"\bapproval rate\b", r"\bapproved without major edits\b"],
-    "Repository Compliance": [r"\bversion control\b", r"\bapproval logs\b", r"\brepository\b"],
-    "System Uptime": [r"\buptime\b", r"\bavailability\b", r"\b99\.\d{1,2}% availability\b"],
-    "Concurrent Users Supported": [r"\bconcurrent users\b"],
-    "JD Parsing Accuracy": [r"\bjd parsing\b", r"\bjob description parsing\b"],
-    "Skills Extraction Precision": [r"\bskills extraction\b", r"\bskill extraction\b"],
-    "Resume Matching Accuracy": [r"\bresume matching\b", r"\bcv matching\b"],
-    "JD-Resume Match Score": [r"\bmatch score\b"],
-    "Average Screening Time": [r"\bscreening time\b", r"\bscreen time\b"],
-    "Response Latency": [r"\blatency\b", r"\bresponse time\b"],
-
-    # Core HR
-    "Voluntary Attrition Rate": [r"\bvoluntary attrition\b", r"\bvoluntary turnover\b"],
-    "Involuntary Attrition Rate": [r"\binvoluntary attrition\b", r"\binvoluntary turnover\b"],
-    "Employee Retention Rate": [r"\bretention rate\b", r"\bemployee retention\b"],
-    "First Year Attrition Rate": [r"\bfirst[- ]year attrition\b"],
-    "Average Tenure": [r"\baverage tenure\b", r"\bavg tenure\b"],
-    "Internal Mobility Rate": [r"\binternal mobility\b"],
-    "Absenteeism Rate": [r"\babsenteeism\b"],
-    "Employee Satisfaction Score": [r"\bemployee satisfaction\b", r"\bsatisfaction score\b"],
-    "Employee NPS": [r"\bemployee nps\b", r"\benps\b", r"\bnet promoter score\b"],
-    "Engagement Score": [r"\bengagement score\b"],
-    "Time to Fill": [r"\btime to fill\b"],
-    "Time to Hire": [r"\btime to hire\b"],
-    "Offer Acceptance Rate": [r"\boffer acceptance\b"],
-    "Quality of Hire": [r"\bquality of hire\b"],
-    "Cost per Hire": [r"\bcost per hire\b"],
-}
-
-EXCLUDE_PHRASES = [
-    "business requirements document","brd","document","project","model","introduction","purpose","scope",
-    "assumptions","out of scope","table of contents","revision history","version","author","date","appendix"
-]
-METRIC_WORDS = re.compile(
-    r"\b(rate|ratio|score|index|time|latency|throughput|tenure|utilization|accuracy|precision|recall|f1|cost|uptime|availability|concurrent|match)\b",
-    re.I,
-)
-
-def canonical_from_text(s):
-    low = s.lower()
-    for canon, pats in KPI_CANON.items():
-        for pat in pats:
-            if re.search(pat, low):
-                return canon
-    return None
-
-def is_probably_kpi(line):
-    low = line.lower()
-    if any(ph in low for ph in EXCLUDE_PHRASES): return False
-    if canonical_from_text(low): return True
-    if re.search(r"\b(shall|should|must|system)\b", low) and METRIC_WORDS.search(low): return True
-    if METRIC_WORDS.search(low) and (find_targets(low) or re.search(r"\b(kpi|metric)\b", low)): return True
-    return False
-
-KPI_SEEDS = list(KPI_CANON.keys())
-
-def normalize_name(raw_line):
-    canon = canonical_from_text(raw_line)
-    if canon: return canon
-    guess = re.split(r"[:\-–]| \(", raw_line, maxsplit=1)[0].strip()
-    if len(guess.split()) > 6 and not METRIC_WORDS.search(guess):
-        guess = " ".join(guess.split()[:6])
-    match = process.extractOne(guess, KPI_SEEDS, scorer=fuzz.WRatio)
-    if match and match[1] >= 85: return match[0]
-    return guess.title()
-
-def dedup_rows(df):
-    if df.empty: return df
-    def _norm(k): return re.sub(r"[^a-z0-9]+", " ", str(k).lower()).strip()
-    best = {}
-    for _, r in df.iterrows():
-        key = _norm(r["KPI Name"])
-        cur = best.get(key)
-        if cur is None or (not cur["Target Value"] and r["Target Value"]):
-            best[key] = r
-    return pd.DataFrame(best.values()).reset_index(drop=True)
-
-def extract_kpis(text):
-    cols = ["KPI Name", "Description", "Target Value", "Status"]
-    rows = []
-    for ln in preprocess_text(text):
-        if not is_probably_kpi(ln):
-            continue
-        name = normalize_name(ln)
-        targets = find_targets(ln)
-        desc = ln if len(ln) <= 240 else ln[:237] + "…"
-        rows.append({"KPI Name": name, "Description": desc, "Target Value": targets, "Status": "Pending"})
-    df = pd.DataFrame(rows, columns=cols)
-    df = dedup_rows(df)
-    return df if not df.empty else pd.DataFrame(columns=cols)
-
-# ---------- Description generator for Recommended KPIs ----------
-RECOMMENDED_DESC = {
-    "JD Parsing Accuracy": "Percentage of job descriptions correctly parsed into structured fields.",
-    "Skills Extraction Precision": "Precision of the skills extraction model on annotated JD/resume samples.",
-    "Resume Matching Accuracy": "Share of candidate-resume matches correctly ranked in the top results.",
-    "JD-Resume Match Score": "Average relevance score between a job description and shortlisted resumes.",
-    "Average Screening Time": "Average time recruiters take to screen a candidate profile.",
-    "Response Latency": "Average system response time for JD/ATS actions and searches.",
-    "Concurrent Users Supported": "Maximum number of users supported concurrently without degradation.",
-    "System Uptime": "Percent of time the platform is available to users in a period.",
-    "Voluntary Attrition Rate": "Share of employees who leave voluntarily within the period.",
-    "Involuntary Attrition Rate": "Share of separations initiated by the employer within the period.",
-    "Employee Retention Rate": "Percent of employees retained over a 12-month period.",
-    "First Year Attrition Rate": "Share of new hires leaving within their first 12 months.",
-    "Average Tenure": "Average length of service for active employees.",
-    "Internal Mobility Rate": "Percent of roles filled by internal candidates.",
-    "Absenteeism Rate": "Unplanned absence days as a percentage of total scheduled days.",
-    "Employee Satisfaction Score": "Average score from periodic satisfaction/engagement surveys.",
-    "Employee NPS": "Employee Net Promoter Score from pulse or annual surveys.",
-    "Time to Fill": "Average number of days between job posting and offer acceptance.",
-    "Time to Hire": "Average number of days between candidate application and offer acceptance.",
-    "Offer Acceptance Rate": "Percent of offers accepted by candidates.",
-    "Quality of Hire": "Composite index of performance, retention, and cultural fit of new hires.",
-    "Cost per Hire": "Average end-to-end recruiting cost to make a hire.",
-}
-def generate_description(kpi_name: str, topic: str | None) -> str:
-    if kpi_name in RECOMMENDED_DESC:
-        return RECOMMENDED_DESC[kpi_name]
-    base = kpi_name.rstrip(".")
-    return f"Standard definition for {base} measured consistently across the period."
-
-# ---------- Recommendations ----------
-TOPIC_KPIS = {
-    "attrition_retention": [
-        "Voluntary Attrition Rate","Involuntary Attrition Rate","Employee Retention Rate",
-        "First Year Attrition Rate","Average Tenure","Internal Mobility Rate",
-        "Stay Interview Coverage","Exit Interview Completion Rate","Regretted Attrition Rate"
-    ],
-    "jd_ats": [
-        "JD Parsing Accuracy","Skills Extraction Precision","Resume Matching Accuracy",
-        "JD-Resume Match Score","Automation Rate","Throughput Per Hour",
-        "Average Screening Time","Recruiter Productivity","False Positive Match Rate","SLA Compliance"
-    ],
-    "workforce_planning": [
-        "Headcount Growth","Vacancy Rate","Time to Backfill","Capacity Utilization",
-        "Forecast Accuracy","Bench Strength Index","Span of Control"
-    ],
-    "recruiting": [
-        "Time to Fill","Time to Hire","Offer Acceptance Rate","Quality of Hire",
-        "Cost per Hire","Candidate Drop-off Rate","Interview to Offer Ratio"
-    ],
-    "learning_development": [
-        "Training Completion Rate","Training Effectiveness Score","Certification Pass Rate",
-        "Learning Hours per Employee","Time to Competency","Skills Coverage Index"
-    ],
-    "engagement_culture": [
-        "Engagement Score","Employee NPS","Participation Rate (Surveys)",
-        "Recognition Frequency","Manager Feedback Response Time","eNPS Promoter Ratio"
-    ],
-}
-FALLBACK_KPIS = {
-    "hr": [
-        "Offer Acceptance Rate","Absenteeism Rate","Training Completion Rate","Employee NPS",
-        "Internal Mobility Rate","Quality of Hire","Cost per Hire","Diversity Ratio",
-        "Vacancy Rate","First Year Attrition Rate"
-    ],
-    "sales": ["Win Rate","Lead Conversion","Quota Attainment","Average Deal Size","Sales Cycle Length"],
-    "marketing": ["CTR","CAC","CPL","Brand Awareness Index","Email Open Rate"],
-    "finance": ["Operating Margin","EBITDA Margin","Cash Burn","Runway Months","DSO"],
-}
-
-def recommend(domain, existing, topic=None, raw_text=""):
-    existing_l = {e.lower() for e in existing}
-    if domain == "hr":
-        topic = topic or infer_hr_topic(raw_text)
-        pool = TOPIC_KPIS.get(topic, FALLBACK_KPIS["hr"])
+# ---------- KPI extraction stubs ----------
+def extract_kpis(text: str) -> pd.DataFrame:
+    # Simple demo extraction
+    if "attrition" in text.lower():
+        rows = [
+            {"KPI Name": "Voluntary Attrition Rate", "Description": "10% reduction in voluntary attrition in 12 months.", "Target Value": "in 12 months", "Status": "Pending"},
+            {"KPI Name": "System Uptime", "Description": "Ensure system availability and scalability.", "Target Value": "", "Status": "Pending"},
+        ]
     else:
-        pool = FALLBACK_KPIS.get(domain, [])
-    out, seen = [], set()
-    for k in pool:
-        if k.lower() in existing_l or k.lower() in seen: continue
-        out.append(k); seen.add(k.lower())
-        if len(out) >= 12: break
-    return out, topic
+        rows = [
+            {"KPI Name": "Employee Retention Rate", "Description": "Percentage of employees remaining after 12 months.", "Target Value": ">85%", "Status": "Pending"}
+        ]
+    return pd.DataFrame(rows)
 
-# ---------- Table helpers ----------
-def _table_head(cols, headers):
+
+def recommend(domain: str, existing: list, topic: str = None, raw_text: str = "") -> list:
+    pool = ["Involuntary Attrition Rate", "Employee Retention Rate", "First Year Attrition Rate"]
+    return [k for k in pool if k not in existing]
+
+
+# ---------- UI helpers ----------
+def render_kpi_table(brd: str, df: pd.DataFrame, key_prefix: str, is_recommended=False):
+    if df.empty:
+        st.caption("No data available.")
+        return df
+
     st.markdown(
-        "<div class='table-head' style='display:grid;grid-template-columns:" +
-        " ".join(cols) + ";'>" +
-        "".join([f"<div>{h}</div>" for h in headers]) +
-        "</div>", unsafe_allow_html=True
+        f"""
+        <div style="display:grid;grid-template-columns:{'1fr ' * (len(df.columns)+1)};
+        background:#f3f4f6;padding:8px 12px;font-weight:600;border-radius:6px 6px 0 0;">
+        {''.join(f"<div>{col}</div>" for col in df.columns)}<div>Actions</div>
+        </div>
+        """, unsafe_allow_html=True
     )
-    st.markdown("<div class='table-body'>", unsafe_allow_html=True)
 
-def _table_tail():
-    st.markdown("</div>", unsafe_allow_html=True)
-
-# FIXED: buttons + status chip stay on same row (no extra line)
-def render_extracted_table(brd, df, key_prefix):
-    if df.empty:
-        st.caption("No extracted KPIs.")
-        return df
-    _table_head(["2fr","3fr","1.1fr","0.9fr","1.9fr"], ["KPI Name","Description","Target Value","Status","Actions"])
     updated = []
-    for i, r in df.iterrows():
-        c1, c2, c3, c4, c5 = st.columns([2,3,1.1,0.9,1.9])
-        with c1: st.markdown(f"<div class='cell'><b>{r['KPI Name']}</b></div>", unsafe_allow_html=True)
-        with c2: st.markdown(f"<div class='cell'>{r['Description']}</div>", unsafe_allow_html=True)
-        with c3:
-            target_val = st.text_input("", value=r["Target Value"], key=f"{key_prefix}_target_{i}")
-        with c4:
-            st.markdown(f"<div class='cell'>{_status_badge(r['Status'])}</div>", unsafe_allow_html=True)
-        with c5:
-            b1, b2, chip = st.columns([1,1,1])
-            if b1.button("Validate", key=f"{key_prefix}_ok_{i}"):
-                r["Status"] = "Validated"
-                _upsert_final(brd, {
-                    "BRD": brd, "KPI Name": r["KPI Name"], "Source": "Extracted",
-                    "Description": r["Description"], "Owner/ SME": "", "Target Value": target_val
-                })
-            if b2.button("Reject", key=f"{key_prefix}_rej_{i}"):
-                r["Status"] = "Rejected"
-                _remove_from_final(brd, r["KPI Name"])
-            with chip:
-                st.markdown(_status_badge(r["Status"]), unsafe_allow_html=True)
-        updated.append({"KPI Name": r["KPI Name"], "Description": r["Description"], "Target Value": target_val, "Status": r["Status"]})
-    _table_tail()
-    return pd.DataFrame(updated, columns=list(df.columns))
+    for i, row in df.iterrows():
+        cols = st.columns([1 for _ in range(len(df.columns)+1)])
+        row_data = {}
+        for j, col in enumerate(df.columns):
+            val = row[col]
+            if col in ["Owner/ SME", "Target Value"]:
+                row_data[col] = cols[j].text_input("", value=str(val) if pd.notna(val) else "",
+                                                   key=f"{key_prefix}_{i}_{col}")
+            elif col == "Status":
+                cols[j].markdown(status_chip(val), unsafe_allow_html=True)
+                row_data[col] = val
+            else:
+                cols[j].write(val if val else "—")
+                row_data[col] = val
 
-# FIXED: buttons + status chip aligned in same row
-def render_recommended_table(brd, df, key_prefix):
-    if df.empty:
-        st.caption("No recommendations.")
-        return df
-    _table_head(
-        ["2fr","2.5fr","1fr","1fr","0.8fr","2.2fr"],
-        ["KPI Name","Description","Owner/ SME","Target Value","Status","Actions"]
-    )
-    updated = []
-    for i, r in df.iterrows():
-        c1, c2, c3, c4, c5, c6 = st.columns([2,2.5,1,1,0.8,2.2])
-        with c1: st.markdown(f"<div class='cell'><b>{r['KPI Name']}</b></div>", unsafe_allow_html=True)
-        with c2: st.markdown(f"<div class='cell'>{r.get('Description','')}</div>", unsafe_allow_html=True)
-        with c3: owner_val  = st.text_input("", value=r.get("Owner/ SME",""), key=f"{key_prefix}_owner_{i}")
-        with c4: target_val = st.text_input("", value=r.get("Target Value",""), key=f"{key_prefix}_target_{i}")
-        with c5: st.markdown(f"<div class='cell'>{_status_badge(r['Status'])}</div>", unsafe_allow_html=True)
-        with c6:
-            b1, b2, chip = st.columns([1,1,1])
-            if b1.button("Validate", key=f"{key_prefix}_ok_{i}"):
-                r["Status"] = "Validated"
-                _upsert_final(brd, {
-                    "BRD": brd, "KPI Name": r["KPI Name"], "Source": "Recommended",
-                    "Description": r.get("Description",""), "Owner/ SME": owner_val, "Target Value": target_val
-                })
-            if b2.button("Reject", key=f"{key_prefix}_rej_{i}"):
-                r["Status"] = "Rejected"
-                _remove_from_final(brd, r["KPI Name"])
-            with chip:
-                st.markdown(_status_badge(r["Status"]), unsafe_allow_html=True)
+        # Actions: Validate / Reject buttons
+        validate = cols[-1].button("Validate", key=f"{key_prefix}_{i}_val")
+        reject = cols[-1].button("Reject", key=f"{key_prefix}_{i}_rej")
 
-        updated.append({
-            "KPI Name": r["KPI Name"],
-            "Description": r.get("Description",""),
-            "Owner/ SME": owner_val,
-            "Target Value": target_val,
-            "Status": r["Status"]
-        })
-    _table_tail()
-    return pd.DataFrame(updated, columns=list(df.columns))
+        if validate:
+            row_data["Status"] = "Validated"
+            st.session_state["final_kpis"].setdefault(brd, []).append(row_data)
+        elif reject:
+            row_data["Status"] = "Rejected"
+            if brd in st.session_state["final_kpis"]:
+                st.session_state["final_kpis"][brd] = [r for r in st.session_state["final_kpis"][brd]
+                                                       if r["KPI Name"] != row_data["KPI Name"]]
 
-def manual_kpi_adder(brd, topic):
-    st.markdown("#### Add KPI manually")
-    with st.form(key=f"manual_add_{brd}", clear_on_submit=True):
-        kpi_name = st.text_input("KPI Name *", value="")
-        suggested_desc = generate_description(kpi_name.strip(), topic) if kpi_name.strip() else ""
-        if suggested_desc:
-            st.caption(f"Auto description: {suggested_desc}")
-        c3, c4 = st.columns([1,1])
-        owner    = c3.text_input("Owner/ SME", value="")
-        target   = c4.text_input("Target Value", value="")
-        add = st.form_submit_button("Add KPI")
-    if add:
-        if not kpi_name.strip():
-            st.warning("Please enter a KPI Name.")
-            return
-        rec_df = st.session_state["projects"][brd]["recommended"]
-        all_existing = set([x.lower() for x in rec_df["KPI Name"].astype(str).tolist()])
-        ext_df = st.session_state["projects"][brd]["extracted"]
-        all_existing |= set([x.lower() for x in ext_df["KPI Name"].astype(str).tolist()])
-        if kpi_name.strip().lower() in all_existing:
-            st.warning("That KPI already exists in this BRD.")
-            return
-        new_row = {
-            "KPI Name": kpi_name.strip(),
-            "Description": generate_description(kpi_name.strip(), topic),
-            "Owner/ SME": owner.strip(),
-            "Target Value": target.strip(),
-            "Status": "Pending"
-        }
-        rec_df = pd.concat([rec_df, pd.DataFrame([new_row])], ignore_index=True)
-        st.session_state["projects"][brd]["recommended"] = rec_df
-        st.success("KPI added to Recommended.")
-        st.rerun()
+        updated.append(row_data)
 
-# ---------- Pipeline per file ----------
+    return pd.DataFrame(updated)
+
+
+# ---------- Pipeline ----------
 def process_file(file):
     text = read_uploaded(file)
-    domain = infer_domain(text)
-    topic  = infer_hr_topic(text) if domain == "hr" else None
-
     extracted = extract_kpis(text)
-    existing = extracted["KPI Name"].astype(str).tolist() if not extracted.empty else []
-    recs, topic = recommend(domain, existing, topic=topic, raw_text=text)
-
-    rows = []
-    for r in recs:
-        rows.append({
-            "KPI Name": r,
-            "Description": generate_description(r, topic),
-            "Owner/ SME": "",
-            "Target Value": "",
-            "Status": "Pending"
-        })
-    recommended = pd.DataFrame(rows, columns=["KPI Name", "Description", "Owner/ SME", "Target Value", "Status"])
-
-    st.session_state["projects"][file.name] = {
-        "domain": domain, "topic": topic,
+    recs = recommend("hr", extracted["KPI Name"].tolist(), raw_text=text)
+    recommended = pd.DataFrame(
+        [{"KPI Name": r, "Description": f"Auto-generated description for {r}", "Owner/ SME": "", "Target Value": "", "Status": "Pending"} for r in recs]
+    )
+    st.session_state.projects[file.name] = {
         "extracted": extracted, "recommended": recommended
     }
-    st.session_state["final_kpis"].setdefault(
-        file.name,
-        pd.DataFrame(columns=["BRD","KPI Name","Source","Description","Owner/ SME","Target Value"])
-    )
 
-# ---------- Main ----------
-uploads = st.file_uploader("Upload BRDs", type=["pdf","docx","txt"], accept_multiple_files=True)
+
+# ---------- Login ----------
+def render_login():
+    st.markdown("<h2 style='color:#b91c1c'>AI KPI System</h2>", unsafe_allow_html=True)
+    st.subheader("Sign in to continue")
+
+    email = st.text_input("Email")
+    password = st.text_input("Password", type="password")
+
+    if st.button("Sign in"):
+        if _check_credentials(email, password):
+            st.session_state["auth"] = True
+            st.session_state["user"] = email.strip().lower()
+            st.success("Signed in successfully")
+            st.rerun()
+        else:
+            st.error("Invalid email or password")
+
+
+# ---------- Main App ----------
+if not st.session_state["auth"]:
+    render_login()
+    st.stop()
+
+with st.sidebar:
+    st.caption(f"Signed in as **{st.session_state.get('user','')}**")
+    if st.button("Log out"):
+        for k in ["auth", "user", "projects", "final_kpis"]:
+            if k in st.session_state: del st.session_state[k]
+        st.rerun()
+
+uploads = st.file_uploader("Upload BRDs", type=["pdf", "docx", "txt"], accept_multiple_files=True)
 
 if st.button("Process BRDs"):
     if not uploads:
@@ -679,24 +213,28 @@ if st.button("Process BRDs"):
         for f in uploads:
             process_file(f)
         count = len(uploads)
-        st.success(f"✅ Processed {count} BRD{'s' if count != 1 else ''} successfully")
+        st.success("✅ Processed {} BRD{} successfully".format(count, "" if count == 1 else "s"))
 
-# ---------- Render per BRD ----------
-for fname, proj in st.session_state["projects"].items():
-    topic_text = f" — Topic: **{proj.get('topic','').replace('_',' ').title()}**" if proj.get("topic") else ""
-    st.markdown(f"## 📄 {fname} — Domain: **{proj['domain'].upper()}**{topic_text}")
-
+for fname, proj in st.session_state.projects.items():
+    st.markdown(f"## 📄 {fname}")
     st.subheader("Extracted KPIs")
-    proj["extracted"] = render_extracted_table(fname, proj["extracted"], key_prefix=f"ext_{fname}")
+    proj["extracted"] = render_kpi_table(fname, proj["extracted"], f"ext_{fname}")
 
     st.subheader("Recommended KPIs")
-    manual_kpi_adder(fname, proj.get("topic"))
-    proj["recommended"] = render_recommended_table(fname, proj["recommended"], key_prefix=f"rec_{fname}")
+    proj["recommended"] = render_kpi_table(fname, proj["recommended"], f"rec_{fname}", is_recommended=True)
 
-    st.markdown("<div class='kpi-header'>Finalized KPIs (This BRD)</div>", unsafe_allow_html=True)
-    final_df = st.session_state["final_kpis"].get(fname, pd.DataFrame())
-    if final_df.empty:
-        st.caption("No validated KPIs yet for this BRD. Use Validate above.")
-    else:
-        show = final_df[["KPI Name","Source","Owner/ SME","Target Value","Description"]].sort_values("KPI Name")
-        st.dataframe(show, use_container_width=True, hide_index=True)
+    # Manual add
+    with st.expander("➕ Add KPI manually"):
+        new_kpi = st.text_input(f"New KPI Name ({fname})", key=f"newkpi_{fname}")
+        if st.button(f"Add KPI to {fname}", key=f"btn_{fname}"):
+            if new_kpi:
+                new_row = {"KPI Name": new_kpi, "Description": f"Auto-generated description for {new_kpi}",
+                           "Owner/ SME": "", "Target Value": "", "Status": "Pending"}
+                proj["recommended"] = pd.concat([proj["recommended"], pd.DataFrame([new_row])], ignore_index=True)
+                st.success(f"Added {new_kpi} to recommended KPIs")
+                st.rerun()
+
+    # Show final KPIs
+    if fname in st.session_state["final_kpis"] and st.session_state["final_kpis"][fname]:
+        st.subheader("✅ Finalized KPIs")
+        st.table(pd.DataFrame(st.session_state["final_kpis"][fname]))
