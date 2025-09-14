@@ -23,18 +23,25 @@ st.title("AI KPI Extraction & Recommendations (Per BRD)")
 st.markdown(
     """
     <style>
-    .stTextInput>div>div>input {
-        border: 1.5px solid #b91c1c; border-radius: 6px; padding: 6px 8px; background:#fff;
+    :root { --brand:#b91c1c; }
+    .stTextInput>div>div>input, .stSelectbox>div>div>select {
+        border:1.5px solid var(--brand); border-radius:6px; padding:6px 8px; background:#fff;
     }
-    .stTextInput>div>div>input:focus {
-        border: 2px solid #b91c1c !important; outline:none !important; box-shadow:0 0 5px #b91c1c;
+    .stTextInput>div>div>input:focus, .stSelectbox>div>div>select:focus {
+        border:2px solid var(--brand) !important; outline:none !important; box-shadow:0 0 5px var(--brand);
     }
-    .stSelectbox>div>div>select {
-        border: 1.5px solid #b91c1c; border-radius: 6px; padding: 6px 8px; background:#fff;
-    }
-    .stSelectbox>div>div>select:focus {
-        border: 2px solid #b91c1c !important; outline:none !important; box-shadow:0 0 5px #b91c1c;
-    }
+    .kpi-header { background:#b91c1c; color:#fff; padding:10px 12px; border-radius:8px 8px 0 0; font-weight:700; }
+    .badge { display:inline-block; padding:3px 8px; border-radius:999px; font-size:12px; color:#fff; }
+    .badge-pending { background:#9ca3af; }
+    .badge-validated { background:#16a34a; }
+    .badge-rejected { background:#7f1d1d; }
+    .table-head { background:#f8fafc; border:1px solid #f1f5f9; border-bottom:0; border-radius:8px 8px 0 0; padding:8px 12px; font-weight:700; }
+    .table-body { border:1px solid #f1f5f9; border-top:0; border-radius:0 0 8px 8px; }
+    .cell { padding:10px 12px; border-top:1px solid #f1f5f9; }
+    .btn { border:0; border-radius:8px; padding:6px 12px; font-weight:600; cursor:pointer; }
+    .btn-ghost { background:#f3f4f6; color:#111827; }
+    .btn-validate { background:#2563eb; color:#fff; }
+    .btn-reject { background:#ef4444; color:#fff; }
     </style>
     """,
     unsafe_allow_html=True
@@ -43,11 +50,24 @@ st.markdown(
 # ---------- Session ----------
 if "projects" not in st.session_state:
     st.session_state["projects"] = {}   # {file: {domain, topic, extracted, recommended}}
+if "final_kpis" not in st.session_state:
+    # per BRD dataframe of finalized KPIs
+    st.session_state["final_kpis"] = {}  # brd -> DataFrame(BRD, KPI Name, Source, Description, Owner/ SME, Target Value)
 
-STATUS_COLORS = {"Validated": "#16a34a", "Rejected": "#7f1d1d", "Pending": "#9ca3af"}
-def status_chip(s: str) -> str:
-    color = STATUS_COLORS.get(s, "#6b7280")
-    return f'<span style="background:{color};color:#fff;padding:2px 8px;border-radius:10px;font-size:12px">{s}</span>'
+def _status_badge(s: str) -> str:
+    cls = "badge-pending"
+    if s == "Validated": cls = "badge-validated"
+    elif s == "Rejected": cls = "badge-rejected"
+    return f"<span class='badge {cls}'>{s}</span>"
+
+def _upsert_final(brd: str, row: dict):
+    """Insert/update a KPI into the final table for a BRD, dedup by KPI Name."""
+    df = st.session_state["final_kpis"].get(brd, pd.DataFrame(
+        columns=["BRD","KPI Name","Source","Description","Owner/ SME","Target Value"]
+    ))
+    df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+    df.drop_duplicates(subset=["KPI Name"], keep="last", inplace=True)
+    st.session_state["final_kpis"][brd] = df
 
 # ---------- File reading (PDF w/ OCR, DOCX incl. tables) ----------
 def read_text_from_bytes(data: bytes, name: str) -> str:
@@ -55,7 +75,6 @@ def read_text_from_bytes(data: bytes, name: str) -> str:
     bio = io.BytesIO(data)
 
     if lname.endswith(".pdf"):
-        # 1) native text
         try:
             reader = PdfReader(bio)
             txt = "\n".join((p.extract_text() or "") for p in reader.pages)
@@ -63,14 +82,14 @@ def read_text_from_bytes(data: bytes, name: str) -> str:
                 return txt
         except Exception:
             pass
-        # 2) OCR
         if OCR_AVAILABLE:
             try:
                 imgs = convert_from_bytes(data)
                 parts = []
                 for im in imgs:
                     t = pytesseract.image_to_string(im, lang="eng")
-                    if t and t.strip(): parts.append(t)
+                    if t and t.strip():
+                        parts.append(t)
                 return "\n".join(parts)
             except Exception:
                 return ""
@@ -130,13 +149,13 @@ def infer_hr_topic(text: str) -> str:
     best, score = None, 0
     for topic, kws in HR_TOPIC_KEYWORDS.items():
         s = sum(low.count(k) for k in kws)
-        if s > score: best, score = topic, s
+        if s > score:
+            best, score = topic, s
     return best or "recruiting"
 
 # ---------- Text preprocessing ----------
 SPLIT_TOKENS = r"[•\u2022\-\–\—\·]|(?:^\s*\d+[\.\)])"
 def preprocess_text(raw: str) -> list[str]:
-    # fuse wrapped lines
     lines = [l.strip() for l in raw.splitlines()]
     fused, buf = [], ""
     for l in lines:
@@ -150,7 +169,6 @@ def preprocess_text(raw: str) -> list[str]:
             buf = l
     if buf: fused.append(buf.strip())
 
-    # explode bullets and then split into sentences
     bullets = []
     for chunk in fused:
         for s in re.split(SPLIT_TOKENS, chunk):
@@ -165,7 +183,6 @@ def preprocess_text(raw: str) -> list[str]:
     return sents
 
 # ---------- KPI patterns ----------
-# Targets (now includes seconds/ms and numeric "users")
 TARGET_PERCENT = r"\b(?:<|>|≤|≥)?\s*\d{1,3}(?:\.\d+)?\s*%\b"
 TARGET_RATIO   = r"\b\d+(?:\.\d+)?\s*/\s*\d+\b"
 TARGET_TIME    = r"\b(?:in|within|by)\s+\d+\s*(?:days?|weeks?|months?|quarters?|years?)\b"
@@ -181,7 +198,6 @@ def find_targets(s: str) -> str:
             hits.append(m.group(0).strip())
     return " | ".join(dict.fromkeys(hits))
 
-# Canonical KPI dictionary (aliases → canonical)
 KPI_CANON = {
     # JD/ATS & platform KPIs
     "JD Generation Time": [
@@ -209,7 +225,7 @@ KPI_CANON = {
     "Average Screening Time": [r"\bscreening time\b", r"\bscreen time\b"],
     "Response Latency": [r"\blatency\b", r"\bresponse time\b"],
 
-    # Core HR (kept for non-JD docs)
+    # Core HR
     "Voluntary Attrition Rate": [r"\bvoluntary attrition\b", r"\bvoluntary turnover\b"],
     "Involuntary Attrition Rate": [r"\binvoluntary attrition\b", r"\binvoluntary turnover\b"],
     "Employee Retention Rate": [r"\bretention rate\b", r"\bemployee retention\b"],
@@ -248,7 +264,6 @@ def is_probably_kpi(line: str) -> bool:
     low = line.lower()
     if any(ph in low for ph in EXCLUDE_PHRASES): return False
     if canonical_from_text(low): return True
-    # heuristic: requirement + performance/metric word + a target
     if re.search(r"\b(shall|should|must|system)\b", low) and METRIC_WORDS.search(low):
         return True
     if METRIC_WORDS.search(low) and (find_targets(low) or re.search(r"\b(kpi|metric)\b", low)):
@@ -281,15 +296,13 @@ def dedup_rows(df: pd.DataFrame) -> pd.DataFrame:
 def extract_kpis(text: str) -> pd.DataFrame:
     cols = ["KPI Name", "Description", "Target Value", "Status"]
     rows = []
-
     for ln in preprocess_text(text):
-        if not is_probably_kpi(ln): 
+        if not is_probably_kpi(ln):
             continue
         name = normalize_name(ln)
         targets = find_targets(ln)
         desc = ln if len(ln) <= 240 else ln[:237] + "…"
         rows.append({"KPI Name": name, "Description": desc, "Target Value": targets, "Status": "Pending"})
-
     df = pd.DataFrame(rows, columns=cols)
     df = dedup_rows(df)
     return df if not df.empty else pd.DataFrame(columns=cols)
@@ -348,39 +361,76 @@ def recommend(domain: str, existing: list, topic: str = None, raw_text: str = ""
         if len(out) >= 12: break
     return out
 
-# ---------- UI helpers ----------
-def render_editable_table(df: pd.DataFrame, editable_cols: list, key_prefix: str):
-    if df.empty:
-        st.caption("No data available.")
-        return df
+# ---------- UI: tables with buttons ----------
+def _table_head(cols, headers):
     st.markdown(
-        f"""
-        <div style="display:grid;grid-template-columns:{'1fr ' * (len(df.columns))};
-        background:#b91c1c;color:white;padding:8px 12px;font-weight:600;border-radius:6px 6px 0 0;">
-        {''.join(f"<div>{col}</div>" for col in df.columns)}
-        </div>
-        """, unsafe_allow_html=True
+        "<div class='table-head' style='display:grid;grid-template-columns:" +
+        " ".join(cols) + ";'>" +
+        "".join([f"<div>{h}</div>" for h in headers]) +
+        "</div>", unsafe_allow_html=True
     )
+    st.markdown("<div class='table-body'>", unsafe_allow_html=True)
 
-    updated_rows = []
-    for i, row in df.iterrows():
-        cols = st.columns([1 for _ in df.columns])
-        row_data = {}
-        for j, col in enumerate(df.columns):
-            val = row[col]
-            if col in editable_cols:
-                row_data[col] = cols[j].text_input("", value=str(val) if pd.notna(val) else "", key=f"{key_prefix}_{i}_{col}")
-            elif col == "Status":
-                opts = ["Choose…","Validated","Rejected"]
-                default = "Choose…" if val not in ("Validated","Rejected") else val
-                choice = cols[j].selectbox("", opts, index=opts.index(default), key=f"{key_prefix}_{i}_{col}_status")
-                row_data[col] = "Pending" if choice == "Choose…" else choice
-                cols[j].markdown(status_chip(row_data[col]), unsafe_allow_html=True)
-            else:
-                cols[j].write(val if (isinstance(val, str) and val.strip()) else "—")
-                row_data[col] = val
-        updated_rows.append(row_data)
-    return pd.DataFrame(updated_rows, columns=list(df.columns))
+def _table_tail():
+    st.markdown("</div>", unsafe_allow_html=True)
+
+def render_extracted_table(brd: str, df: pd.DataFrame, key_prefix: str) -> pd.DataFrame:
+    if df.empty:
+        st.caption("No extracted KPIs.")
+        return df
+    _table_head(["2fr","3fr","1fr","0.8fr","1.4fr"], ["KPI Name","Description","Target Value","Status","Actions"])
+    updated = []
+    for i, r in df.iterrows():
+        c1, c2, c3, c4, c5 = st.columns([2,3,1,0.8,1.4])
+        with c1: st.markdown(f"<div class='cell'><b>{r['KPI Name']}</b></div>", unsafe_allow_html=True)
+        with c2: st.markdown(f"<div class='cell'>{r['Description']}</div>", unsafe_allow_html=True)
+        with c3: target_val = st.text_input("", value=r["Target Value"], key=f"{key_prefix}_target_{i}")
+        with c4: st.markdown(f"<div class='cell'>{_status_badge(r['Status'])}</div>", unsafe_allow_html=True)
+        with c5:
+            colA, colB, colC = st.columns([1,1,1])
+            with colA: st.markdown("<div class='cell'><button disabled class='btn btn-ghost'>Review Details</button></div>", unsafe_allow_html=True)
+            with colB:
+                if st.button("Validate", key=f"{key_prefix}_ok_{i}", type="secondary"):
+                    r["Status"] = "Validated"
+                    _upsert_final(brd, {
+                        "BRD": brd, "KPI Name": r["KPI Name"], "Source": "Extracted",
+                        "Description": r["Description"], "Owner/ SME": "", "Target Value": target_val
+                    })
+            with colC:
+                if st.button("Reject", key=f"{key_prefix}_rej_{i}", type="secondary"):
+                    r["Status"] = "Rejected"
+        updated.append({"KPI Name": r["KPI Name"], "Description": r["Description"], "Target Value": target_val, "Status": r["Status"]})
+    _table_tail()
+    return pd.DataFrame(updated, columns=list(df.columns))
+
+def render_recommended_table(brd: str, df: pd.DataFrame, key_prefix: str) -> pd.DataFrame:
+    if df.empty:
+        st.caption("No recommendations.")
+        return df
+    _table_head(["2fr","1fr","1fr","0.7fr","1.4fr"], ["KPI Name","Owner/ SME","Target Value","Status","Actions"])
+    updated = []
+    for i, r in df.iterrows():
+        c1, c2, c3, c4, c5 = st.columns([2,1,1,0.7,1.4])
+        with c1: st.markdown(f"<div class='cell'><b>{r['KPI Name']}</b></div>", unsafe_allow_html=True)
+        with c2: owner_val = st.text_input("", value=r["Owner/ SME"], key=f"{key_prefix}_owner_{i}")
+        with c3: target_val = st.text_input("", value=r["Target Value"], key=f"{key_prefix}_target_{i}")
+        with c4: st.markdown(f"<div class='cell'>{_status_badge(r['Status'])}</div>", unsafe_allow_html=True)
+        with c5:
+            colA, colB, colC = st.columns([1,1,1])
+            with colA: st.markdown("<div class='cell'><button disabled class='btn btn-ghost'>Review Details</button></div>", unsafe_allow_html=True)
+            with colB:
+                if st.button("Validate", key=f"{key_prefix}_ok_{i}", type="secondary"):
+                    r["Status"] = "Validated"
+                    _upsert_final(brd, {
+                        "BRD": brd, "KPI Name": r["KPI Name"], "Source": "Recommended",
+                        "Description": "", "Owner/ SME": owner_val, "Target Value": target_val
+                    })
+            with colC:
+                if st.button("Reject", key=f"{key_prefix}_rej_{i}", type="secondary"):
+                    r["Status"] = "Rejected"
+        updated.append({"KPI Name": r["KPI Name"], "Owner/ SME": owner_val, "Target Value": target_val, "Status": r["Status"]})
+    _table_tail()
+    return pd.DataFrame(updated, columns=list(df.columns))
 
 # ---------- Pipeline per file ----------
 def process_file(file):
@@ -399,6 +449,11 @@ def process_file(file):
         "domain": domain, "topic": topic,
         "extracted": extracted, "recommended": recommended
     }
+    # init empty final DF for this BRD if not present
+    st.session_state["final_kpis"].setdefault(
+        file.name,
+        pd.DataFrame(columns=["BRD","KPI Name","Source","Description","Owner/ SME","Target Value"])
+    )
 
 # ---------- Main ----------
 uploads = st.file_uploader("Upload BRDs", type=["pdf","docx","txt"], accept_multiple_files=True)
@@ -411,15 +466,22 @@ if st.button("Process BRDs"):
             process_file(f)
         st.success(f"✅ Processed {len(uploads)} BRD{'s' if len(uploads) > 1 else ''} successfully")
 
-# Render sections
+# Render sections per BRD
 for fname, proj in st.session_state.projects.items():
     topic_text = f" — Topic: **{proj.get('topic','').replace('_',' ').title()}**" if proj.get("topic") else ""
     st.markdown(f"## 📄 {fname} — Domain: **{proj['domain'].upper()}**{topic_text}")
 
     st.subheader("Extracted KPIs")
-    proj["extracted"] = render_editable_table(proj["extracted"], editable_cols=["Target Value"], key_prefix=f"ext_{fname}")
+    proj["extracted"] = render_extracted_table(fname, proj["extracted"], key_prefix=f"ext_{fname}")
 
     st.subheader("Recommended KPIs")
-    proj["recommended"] = render_editable_table(
-        proj["recommended"], editable_cols=["Owner/ SME","Target Value"], key_prefix=f"rec_{fname}"
-    )
+    proj["recommended"] = render_recommended_table(fname, proj["recommended"], key_prefix=f"rec_{fname}")
+
+    # --- Finalized per BRD ---
+    st.markdown("<div class='kpi-header'>Finalized KPIs (This BRD)</div>", unsafe_allow_html=True)
+    final_df = st.session_state["final_kpis"].get(fname, pd.DataFrame())
+    if final_df.empty:
+        st.caption("No validated KPIs yet for this BRD. Use Validate above.")
+    else:
+        show = final_df[["KPI Name","Source","Owner/ SME","Target Value","Description"]].sort_values("KPI Name")
+        st.dataframe(show, use_container_width=True, hide_index=True)
