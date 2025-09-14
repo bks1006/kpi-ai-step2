@@ -5,7 +5,7 @@ import streamlit as st
 from pypdf import PdfReader
 from docx import Document as DocxDocument
 
-# ---------- Optional OCR ----------
+# ============ Optional OCR ============
 try:
     from pdf2image import convert_from_bytes
     import pytesseract
@@ -14,7 +14,7 @@ try:
 except Exception:
     OCR_AVAILABLE = False
 
-# ---------- LLM Setup ----------
+# ============ LLM Setup ============
 USE_OPENAI = True
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 if USE_OPENAI and not OPENAI_API_KEY:
@@ -28,20 +28,22 @@ if USE_OPENAI:
     except Exception:
         USE_OPENAI = False
 
-# ---------- Demo credentials ----------
+# ============ Demo credentials ============
 VALID_USERS = {"admin@company.com": "password123", "user@company.com": "welcome123"}
 
-# ---------- Page setup ----------
+# ============ Page ============
 st.set_page_config(page_title="AI KPI System", layout="wide")
 
-# ---------- Session ----------
+# ============ Session ============
 if "auth" not in st.session_state: st.session_state["auth"] = False
 if "user" not in st.session_state: st.session_state["user"] = None
 if "projects" not in st.session_state: st.session_state["projects"] = {}
 if "final_kpis" not in st.session_state: st.session_state["final_kpis"] = {}
 if "llm_cache" not in st.session_state: st.session_state["llm_cache"] = {}
 
-# ---------- Utility ----------
+# ============ Utilities ============
+FINAL_COLS = ["BRD","KPI Name","Source","Description","Owner/ SME","Target Value","Status"]
+
 def _check_credentials(email: str, password: str) -> bool:
     return email.strip().lower() in VALID_USERS and VALID_USERS[email.strip().lower()] == password
 
@@ -52,23 +54,34 @@ def _chip(status: str) -> str:
     elif status == "Accepted": cls = "chip-accepted"
     return f"<span class='chip {cls}'>{status}</span>"
 
+def _ensure_final_df(brd: str) -> pd.DataFrame:
+    df = st.session_state["final_kpis"].get(brd)
+    if df is None or df.empty:
+        df = pd.DataFrame(columns=FINAL_COLS)
+    # make sure all columns exist (fixes KeyError)
+    for c in FINAL_COLS:
+        if c not in df.columns:
+            df[c] = ""
+    df = df[FINAL_COLS]
+    st.session_state["final_kpis"][brd] = df
+    return df
+
 def _upsert_final(brd, row):
-    df = st.session_state["final_kpis"].get(
-        brd, pd.DataFrame(columns=["BRD","KPI Name","Source","Description","Owner/ SME","Target Value","Status"])
-    )
+    df = _ensure_final_df(brd)
+    for c in FINAL_COLS:
+        if c not in row:  # fill missing fields
+            row[c] = ""
     df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
     df.drop_duplicates(subset=["KPI Name"], keep="last", inplace=True)
     st.session_state["final_kpis"][brd] = df
 
 def _remove_from_final(brd, name):
-    df = st.session_state["final_kpis"].get(
-        brd, pd.DataFrame(columns=["BRD","KPI Name","Source","Description","Owner/ SME","Target Value","Status"])
-    )
+    df = _ensure_final_df(brd)
     if not df.empty:
         df = df[df["KPI Name"] != name].reset_index(drop=True)
     st.session_state["final_kpis"][brd] = df
 
-# ---------- File reading ----------
+# ============ File reading ============
 def read_text_from_bytes(data: bytes, name: str) -> str:
     bio = io.BytesIO(data); lname = name.lower()
     if lname.endswith(".pdf"):
@@ -106,7 +119,7 @@ def read_text_from_bytes(data: bytes, name: str) -> str:
 def read_uploaded(file) -> str:
     return read_text_from_bytes(file.read(), file.name)
 
-# ---------- Domain detection ----------
+# ============ Domain detection ============
 def detect_hr_subdomain_heuristic(text: str, filename: str = "") -> str:
     low = (text + " " + filename).lower()
     if any(k in low for k in ["attrition","retention","churn"]): return "hr_attrition_model"
@@ -114,40 +127,38 @@ def detect_hr_subdomain_heuristic(text: str, filename: str = "") -> str:
     if any(k in low for k in ["ats","applicant tracking","requisition","candidate"]): return "hr_ats"
     return "hr_attrition_model"
 
-# ---------- Heuristic KPIs ----------
+# ============ Heuristic KPIs ============
 def extract_kpis_heuristic(text: str, filename: str) -> pd.DataFrame:
     sub = detect_hr_subdomain_heuristic(text, filename)
-    rows = []
     if sub == "hr_attrition_model":
         rows = [
             {"KPI Name":"Voluntary Attrition Reduction",
-             "Description":"% reduction in voluntary exits vs baseline, normalized for headcount.",
+             "Description":"% reduction in voluntary exits vs baseline, normalized for headcount and seasonality.",
              "Target Value":"≥ 10%","Status":"Pending"},
             {"KPI Name":"AUC Accuracy",
-             "Description":"ROC-AUC for predicting attrition risk, segmented by job family and tenure.",
-             "Target Value":"≥ 0.8","Status":"Pending"},
+             "Description":"ROC-AUC for predicting attrition risk; also report by job family and tenure to catch cohort drift.",
+             "Target Value":"≥ 0.80","Status":"Pending"},
         ]
     elif sub == "hr_jd_system":
         rows = [
             {"KPI Name":"JD Latency",
-             "Description":"Median time from request to publishable draft including bias audit.",
+             "Description":"Median time from request to publishable draft including bias audit; measure p50/p90.",
              "Target Value":"< 20s","Status":"Pending"},
             {"KPI Name":"Inclusive Language Improvement",
-             "Description":"Reduction in biased terms per 1,000 words in generated JDs.",
+             "Description":"Reduction in flagged gendered/ableist terms per 1,000 words in generated JDs.",
              "Target Value":"≥ 60%","Status":"Pending"},
         ]
     else:
         rows = [
             {"KPI Name":"Time-to-Fill",
-             "Description":"Days from requisition to accepted offer.",
+             "Description":"Days from requisition open to accepted offer; show p50/p90 by role/location.",
              "Target Value":"< 30 days","Status":"Pending"},
             {"KPI Name":"Automation Rate",
-             "Description":"% recruiter tasks executed automatically.",
+             "Description":"% recruiter tasks executed automatically (screening, scheduling, nudges).",
              "Target Value":"≥ 40%","Status":"Pending"},
         ]
     return pd.DataFrame(rows)
 
-# ---------- Recommend fallback ----------
 HR_KPI_LIB = {
     "hr_attrition_model": [("Dashboard Adoption","Monthly active users / licensed users.")],
     "hr_jd_system": [("Template Utilization","Share of roles starting from approved JD templates.")],
@@ -161,7 +172,7 @@ def recommend_heuristic(existing: list[str], text: str, filename: str) -> list[d
             out.append({"KPI Name":name,"Description":desc,"Owner/ SME":"","Target Value":"","Status":"Pending"})
     return out
 
-# ---------- LLM helpers ----------
+# ============ LLM helpers ============
 def _cache_key(prefix: str, payload: str) -> str:
     return prefix + ":" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
@@ -221,7 +232,17 @@ def recommend_llm(existing: list[str], subdomain: str, text: str, filename: str)
     if not recs: return recommend_heuristic(existing, text, filename)
     return recs[:6]
 
-# ---------- Table UI ----------
+# ============ Row table rendering ============
+ROW_CSS = """
+<style>
+.chip{display:inline-block;padding:4px 10px;border-radius:999px;color:#fff;font-size:12px}
+.chip-pending{background:#9ca3af}.chip-ok{background:#16a34a}.chip-bad{background:#b91c1c}.chip-accepted{background:#059669}
+.inline-btn > div > button{width:100%}
+.cell{padding:8px 10px;border-top:1px solid #e5e7eb}
+</style>
+"""
+st.markdown(ROW_CSS, unsafe_allow_html=True)
+
 def render_table(brd, df, source, key_prefix):
     if df.empty: return df
     updated = []
@@ -232,19 +253,28 @@ def render_table(brd, df, source, key_prefix):
             with c2: st.markdown(r['Description'])
             with c3:
                 owner_val = st.text_input("", value=r.get("Owner/ SME",""),
-                                          key=f"{key_prefix}_o_{i}", label_visibility="collapsed")
+                                          key=f"{key_prefix}_o_{i}", label_visibility="collapsed",
+                                          placeholder="Owner / SME")
             with c4:
                 target_val = st.text_input("", value=r.get("Target Value",""),
-                                           key=f"{key_prefix}_t_{i}", label_visibility="collapsed")
+                                           key=f"{key_prefix}_t_{i}", label_visibility="collapsed",
+                                           placeholder="Target")
             with c5: st.markdown(_chip(r["Status"]), unsafe_allow_html=True)
             with c6:
-                if st.button("Validate", key=f"{key_prefix}_ok_{i}"):
-                    _upsert_final(brd, {"BRD":brd,"KPI Name":r["KPI Name"],"Source":source,
-                                        "Description":r["Description"],"Owner/ SME":owner_val,
-                                        "Target Value":target_val,"Status":"Validated"})
-                    df.at[i,"Status"]="Validated"; st.rerun()
-                if st.button("Reject", key=f"{key_prefix}_rej_{i}"):
-                    _remove_from_final(brd, r["KPI Name"]); df.at[i,"Status"]="Rejected"; st.rerun()
+                b1, b2 = st.columns([1,1], gap="small")   # keeps buttons on the SAME ROW
+                with b1:
+                    if st.button("Validate", key=f"{key_prefix}_ok_{i}"):
+                        _upsert_final(
+                            brd,
+                            {"BRD": brd, "KPI Name": r["KPI Name"], "Source": source,
+                             "Description": r["Description"], "Owner/ SME": owner_val,
+                             "Target Value": target_val, "Status": "Validated"}
+                        )
+                        df.at[i,"Status"] = "Validated"; st.rerun()
+                with b2:
+                    if st.button("Reject", key=f"{key_prefix}_rej_{i}"):
+                        _remove_from_final(brd, r["KPI Name"])
+                        df.at[i,"Status"] = "Rejected"; st.rerun()
             updated.append({"KPI Name":r["KPI Name"],"Description":r["Description"],
                             "Owner/ SME":owner_val,"Target Value":target_val,"Status":df.at[i,"Status"]})
         else:
@@ -253,21 +283,29 @@ def render_table(brd, df, source, key_prefix):
             with c2: st.markdown(r['Description'])
             with c3:
                 target_val = st.text_input("", value=r.get("Target Value",""),
-                                           key=f"{key_prefix}_t_{i}", label_visibility="collapsed")
+                                           key=f"{key_prefix}_t_{i}", label_visibility="collapsed",
+                                           placeholder="Target")
             with c4: st.markdown(_chip(r["Status"]), unsafe_allow_html=True)
             with c5:
-                if st.button("Validate", key=f"{key_prefix}_ok_{i}"):
-                    _upsert_final(brd, {"BRD":brd,"KPI Name":r["KPI Name"],"Source":source,
-                                        "Description":r["Description"],"Owner/ SME":"",
-                                        "Target Value":target_val,"Status":"Validated"})
-                    df.at[i,"Status"]="Validated"; st.rerun()
-                if st.button("Reject", key=f"{key_prefix}_rej_{i}"):
-                    _remove_from_final(brd, r["KPI Name"]); df.at[i,"Status"]="Rejected"; st.rerun()
+                b1, b2 = st.columns([1,1], gap="small")   # SAME ROW
+                with b1:
+                    if st.button("Validate", key=f"{key_prefix}_ok_{i}"):
+                        _upsert_final(
+                            brd,
+                            {"BRD": brd, "KPI Name": r["KPI Name"], "Source": source,
+                             "Description": r["Description"], "Owner/ SME": "",
+                             "Target Value": target_val, "Status": "Validated"}
+                        )
+                        df.at[i,"Status"] = "Validated"; st.rerun()
+                with b2:
+                    if st.button("Reject", key=f"{key_prefix}_rej_{i}"):
+                        _remove_from_final(brd, r["KPI Name"])
+                        df.at[i,"Status"] = "Rejected"; st.rerun()
             updated.append({"KPI Name":r["KPI Name"],"Description":r["Description"],
-                            "Owner/ SME":"","Target Value":target_val,"Status":df.at[i,"Status"]})
+                            "Owner/ SME":"", "Target Value":target_val,"Status":df.at[i,"Status"]})
     return pd.DataFrame(updated)
 
-# ---------- Login ----------
+# ============ Login ============
 def login_page():
     email = st.text_input("Email")
     password = st.text_input("Password", type="password")
@@ -276,7 +314,7 @@ def login_page():
             st.session_state["auth"]=True; st.session_state["user"]=email.strip().lower(); st.rerun()
         else: st.error("Invalid email or password")
 
-# ---------- MAIN ----------
+# ============ MAIN ============
 if not st.session_state["auth"]:
     login_page(); st.stop()
 
@@ -297,9 +335,7 @@ def process_file(f):
         recs = recommend_heuristic(extracted["KPI Name"].tolist(), text, fname)
     recommended = pd.DataFrame(recs)
     st.session_state.projects[fname] = {"extracted":extracted,"recommended":recommended,"domain":sub}
-    st.session_state["final_kpis"].setdefault(
-        fname,pd.DataFrame(columns=["BRD","KPI Name","Source","Description","Owner/ SME","Target Value","Status"])
-    )
+    _ensure_final_df(fname)
 
 if st.button("Process BRDs"):
     if not uploads: st.warning("Please upload at least one file")
@@ -307,23 +343,34 @@ if st.button("Process BRDs"):
         for f in uploads: process_file(f)
         st.success(f"Processed {len(uploads)} BRDs")
 
-# ---------- Per BRD ----------
+# ============ Per BRD ============
 for fname, proj in st.session_state.projects.items():
     st.markdown(f"## 📄 {fname} — Domain: {proj.get('domain','')}")
     st.subheader("Extracted KPIs")
     proj["extracted"] = render_table(fname, proj["extracted"], "Extracted", key_prefix=f"ext_{fname}")
+
     st.subheader("Recommended KPIs")
     proj["recommended"] = render_table(fname, proj["recommended"], "Recommended", key_prefix=f"rec_{fname}")
 
     st.subheader("Finalized KPIs")
-    final_df = st.session_state["final_kpis"].get(fname, pd.DataFrame())
+    final_df = _ensure_final_df(fname)
     if final_df.empty:
         st.caption("No validated KPIs yet.")
     else:
+        # show each with chip and accept per-row
         for i, row in final_df.iterrows():
+            owner = row.get("Owner/ SME","")
+            target = row.get("Target Value","")
+            status = row.get("Status","Validated") or "Validated"
+
             st.markdown(f"**{row['KPI Name']}** — {row['Description']}")
-            st.markdown(f"Owner/ SME: {row['Owner/ SME']} | Target: {row['Target Value']} | {_chip(row['Status'])}", unsafe_allow_html=True)
-            if st.button("Review & Accept", key=f"accept_{fname}_{i}"):
-                final_df.at[i,"Status"]="Accepted"
-                st.session_state["final_kpis"][fname]=final_df
-                st.success(f"✅ {row['KPI Name']} accepted.")
+            st.markdown(f"Owner/ SME: {owner} | Target: {target} | {_chip(status)}",
+                        unsafe_allow_html=True)
+
+            # Per-row Accept button
+            if status != "Accepted":
+                if st.button("Review & Accept", key=f"accept_{fname}_{i}"):
+                    final_df.at[i,"Status"] = "Accepted"
+                    st.session_state["final_kpis"][fname] = final_df
+                    st.success(f"✅ {row['KPI Name']} accepted.")
+            st.divider()
