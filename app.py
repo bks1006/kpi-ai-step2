@@ -24,13 +24,15 @@ if USE_OPENAI:
     try:
         from openai import OpenAI
         client = OpenAI(api_key=OPENAI_API_KEY)
-        OPENAI_MODEL = "gpt-4o-mini"
+        OPENAI_MODEL = "gpt-4o-mini"  # or gpt-4.1 if available on your plan
     except Exception:
         USE_OPENAI = False
 
 # ---------- Demo credentials ----------
-VALID_USERS = {"admin@company.com": "password123",
-               "user@company.com": "welcome123"}
+VALID_USERS = {
+    "admin@company.com": "password123",
+    "user@company.com": "welcome123"
+}
 
 # ---------- Page setup ----------
 st.set_page_config(page_title="AI KPI System", layout="wide")
@@ -86,7 +88,7 @@ def read_text_from_bytes(data: bytes, name: str) -> str:
 def read_uploaded(file) -> str:
     return read_text_from_bytes(file.read(), file.name)
 
-# ---------- Heuristic (fallback) ----------
+# ---------- Heuristic (detailed) ----------
 def detect_hr_subdomain_heuristic(text: str) -> str:
     low = text.lower()
     if any(k in low for k in ["attrition","retention","predictive model","risk score"]): return "hr_attrition_model"
@@ -98,31 +100,61 @@ def extract_kpis_heuristic(text: str) -> pd.DataFrame:
     sub = detect_hr_subdomain_heuristic(text)
     if sub == "hr_attrition_model":
         rows = [
-            {"KPI Name":"Model Accuracy","Description":"Classification accuracy of attrition model.","Target Value":"≥ 85%","Status":"Pending"},
-            {"KPI Name":"Voluntary Attrition Reduction","Description":"Reduction vs baseline over 12 months.","Target Value":"10% in 12 months","Status":"Pending"},
-            {"KPI Name":"Insight Coverage","Description":"Share of high-risk cases with identified drivers.","Target Value":"≥ 80%","Status":"Pending"},
+            {"KPI Name":"Model Accuracy",
+             "Description":"Share of employees correctly classified as staying vs leaving on a held-out test set (never seen in training). Report overall and by major cohorts (role, location, tenure).",
+             "Target Value":"≥ 85%","Status":"Pending"},
+            {"KPI Name":"Voluntary Attrition Reduction",
+             "Description":"Percentage reduction in voluntary exits vs a 12-month baseline, normalized for headcount and seasonality. Attribute lift to actions triggered by the model.",
+             "Target Value":"10% in 12 months","Status":"Pending"},
+            {"KPI Name":"Insight Coverage",
+             "Description":"Percent of high-risk employees for whom the system generates top drivers plus at least one actionable lever (manager coaching, compensation review, internal move, etc.).",
+             "Target Value":"≥ 80%","Status":"Pending"},
         ]
     elif sub == "hr_jd_system":
         rows = [
-            {"KPI Name":"JD Generation Latency","Description":"Median time to generate/redesign a JD.","Target Value":"< 10 sec","Status":"Pending"},
-            {"KPI Name":"Bias Term Reduction","Description":"Reduction of gendered/non-inclusive terms in JDs.","Target Value":"Increase vs baseline","Status":"Pending"},
-            {"KPI Name":"Approval Cycle Time","Description":"Time from draft to final approval.","Target Value":"Decrease vs baseline","Status":"Pending"},
+            {"KPI Name":"JD Generation Latency",
+             "Description":"Median time from request to a publishable draft job description, including bias audit and grading. Measure p50/p90 and segment by job family.",
+             "Target Value":"< 10 sec","Status":"Pending"},
+            {"KPI Name":"Bias Term Reduction",
+             "Description":"Decrease in flagged gendered/ableist/age-coded terms per 1,000 words after rewrite. Detection uses curated dictionary + embedding similarity for near-matches.",
+             "Target Value":"Increase vs baseline","Status":"Pending"},
+            {"KPI Name":"Approval Cycle Time",
+             "Description":"Elapsed time from draft to final HR approval across manager/HR review steps. Highlights workflow efficiency and rework hotspots.",
+             "Target Value":"Decrease vs baseline","Status":"Pending"},
         ]
-    else:
+    else:  # hr_ats
         rows = [
-            {"KPI Name":"Application Drop-off Rate","Description":"Share abandoning during application flow.","Target Value":"Decrease vs baseline","Status":"Pending"},
-            {"KPI Name":"Time-to-Fill","Description":"Days from requisition open to offer accept.","Target Value":"Decrease vs baseline","Status":"Pending"},
-            {"KPI Name":"Automation Rate","Description":"Share of recruiter steps automated.","Target Value":"Increase vs baseline","Status":"Pending"},
+            {"KPI Name":"Application Drop-off Rate",
+             "Description":"Fraction of candidates who start but do not submit the application, segmented by device and step (profile, questions, assessments).",
+             "Target Value":"Decrease vs baseline","Status":"Pending"},
+            {"KPI Name":"Time-to-Fill",
+             "Description":"Days from requisition open to accepted offer, excluding notice. Report by role, grade, and location with p50/p90.",
+             "Target Value":"Decrease vs baseline","Status":"Pending"},
+            {"KPI Name":"Automation Rate",
+             "Description":"Share of recruiter steps executed automatically (screening, scheduling, nudges). Measured as automated events / total events.",
+             "Target Value":"Increase vs baseline","Status":"Pending"},
         ]
     return pd.DataFrame(rows)
 
 HR_KPI_LIB = {
-    "hr_attrition_model":[("Dashboard Adoption","Share of HR users active monthly."),
-                          ("High-Risk Coverage","Percent of high-risk employees flagged.")],
-    "hr_jd_system":[("JD Repository Utilization","Share of roles using templates."),
-                    ("Hiring Manager Adoption","Share of managers using the tool.")],
-    "hr_ats":[("Candidate Satisfaction (CSAT)","Post-application/interview score."),
-              ("Recruiter Productivity","Requisitions handled per recruiter.")],
+    "hr_attrition_model": [
+        ("Dashboard Adoption",
+         "Monthly active HR users / licensed users on the attrition dashboard. Indicates whether insights are informing operational decisions."),
+        ("High-Risk Coverage",
+         "Share of high-risk employees who received a retention action (reach-out, comp review, internal move plan) within 14 days of being flagged."),
+    ],
+    "hr_jd_system": [
+        ("JD Repository Utilization",
+         "Share of open roles that start from or reuse approved templates. Drives consistency and reduces legal/compliance risk."),
+        ("Hiring Manager Adoption",
+         "Percent of requisitions where the hiring manager edited the AI draft versus uploading a manual JD. Indicates end-user trust."),
+    ],
+    "hr_ats": [
+        ("Candidate Satisfaction (CSAT)",
+         "Average post-application/interview rating covering clarity, fairness, and communication. Roll up weekly and by role."),
+        ("Recruiter Productivity",
+         "Average candidates or requisitions handled per recruiter per month while meeting SLAs (response time, feedback time)."),
+    ],
 }
 
 def recommend_heuristic(existing: list[str], raw_text: str) -> list[dict]:
@@ -135,8 +167,8 @@ def recommend_heuristic(existing: list[str], raw_text: str) -> list[dict]:
 
 # ---------- LLM helpers ----------
 CLASSIFY_SYS_PROMPT = "Classify the HR BRD into one of: hr_attrition_model, hr_jd_system, hr_ats. Return ONLY JSON: {\"subdomain\": \"<one>\"}."
-EXTRACT_SYS_PROMPT = ("Extract 3-6 KPIs from the BRD. Return JSON: {\"kpis\":[{\"KPI Name\":str,\"Description\":str,\"Target Value\":str}]}."
-                      "Leave Target Value empty if not specified. Avoid duplicates. Keep concise.")
+EXTRACT_SYS_PROMPT = ("Extract 3-6 KPIs from the BRD. Return JSON: {\"kpis\":[{\"KPI Name\":str,\"Description\":str,\"Target Value\":str}]}. "
+                      "Leave Target Value empty if not specified. Avoid duplicates. Keep concise but informative.")
 RECOMMEND_SYS_PROMPT = ("Suggest 3-6 additional KPIs for the given subdomain that are NOT in the existing list. "
                         "Return JSON: {\"kpis\":[{\"KPI Name\":str,\"Description\":str}]}.")
 
@@ -187,7 +219,7 @@ def recommend_llm(existing: list[str], subdomain: str, text: str) -> list[dict]:
     if not out: return recommend_heuristic(existing, raw_text=text)
     return out[:6]
 
-# ---------- Tables / chips ----------
+# ---------- Chips / tables helpers ----------
 def _chip(status: str) -> str:
     cls = "chip-pending"
     if status == "Validated": cls = "chip-ok"
@@ -215,13 +247,13 @@ def _table_head(cols, headers):
         f"<div class='th-row' style='grid-template-columns:{cols};'>" +
         "".join(f"<div>{h}</div>" for h in headers) + "</div>",
         unsafe_allow_html=True
-    )
-    st.markdown("<div class='tb'>", unsafe_allow_html=True)
+    ); st.markdown("<div class='tb'>", unsafe_allow_html=True)
 
 def _table_tail(): st.markdown("</div>", unsafe_allow_html=True)
 
 def render_extracted_table(brd, df, key_prefix):
-    if df.empty: st.caption("No extracted KPIs."); return df
+    if df.empty:
+        st.caption("No extracted KPIs."); return df
     _table_head("2fr 3fr 1.2fr 0.9fr 1.6fr", ["KPI Name","Description","Target Value","Status","Actions"])
     updated = []
     for i, r in df.iterrows():
@@ -233,8 +265,8 @@ def render_extracted_table(brd, df, key_prefix):
         with c4: st.markdown(f"<div class='cell'>{_chip(status)}</div>", unsafe_allow_html=True)
         with c5:
             st.markdown("<div class='cell'>", unsafe_allow_html=True)
-            v_on = "on-validate" if status == "Validated" else ""
-            rej_on = "on-reject" if status == "Rejected" else ""
+            v_on  = "on-validate" if status == "Validated" else ""
+            rej_on= "on-reject"   if status == "Rejected"  else ""
             col_v, col_r = st.columns([1,1])
             with col_v:
                 st.markdown(f"<div class='btn-wrap {v_on}'>", unsafe_allow_html=True)
@@ -260,7 +292,8 @@ def render_extracted_table(brd, df, key_prefix):
     return pd.DataFrame(updated, columns=list(df.columns))
 
 def render_recommended_table(brd, df, key_prefix):
-    if df.empty: st.caption("No recommended KPIs."); return df
+    if df.empty:
+        st.caption("No recommended KPIs."); return df
     _table_head("2fr 2.5fr 1fr 1fr 0.9fr 1.6fr", ["KPI Name","Description","Owner/ SME","Target Value","Status","Actions"])
     updated = []
     for i, r in df.iterrows():
@@ -273,8 +306,8 @@ def render_recommended_table(brd, df, key_prefix):
         with c5: st.markdown(f"<div class='cell'>{_chip(status)}</div>", unsafe_allow_html=True)
         with c6:
             st.markdown("<div class='cell'>", unsafe_allow_html=True)
-            v_on = "on-validate" if status == "Validated" else ""
-            rej_on = "on-reject" if status == "Rejected" else ""
+            v_on  = "on-validate" if status == "Validated" else ""
+            rej_on= "on-reject"   if status == "Rejected"  else ""
             col_v, col_r = st.columns([1,1])
             with col_v:
                 st.markdown(f"<div class='btn-wrap {v_on}'>", unsafe_allow_html=True)
@@ -323,13 +356,12 @@ def manual_kpi_adder(brd):
 
 # ---------- Login (columns/containers only) ----------
 def login_page():
-    # Scoped login CSS
+    # login-only CSS
     st.markdown("""
     <style>
       :root { --brand:#b91c1c; }
       body, .stApp { background:#ffffff !important; }
       [data-testid="stAppViewContainer"] .main .block-container { padding-top: 12vh; }
-      /* Style the first two inputs (email/password) which are the only ones on the page */
       .stTextInput:nth-of-type(1) > div > div,
       .stTextInput:nth-of-type(2) > div > div {
         border:1.6px solid var(--brand) !important;
@@ -372,24 +404,43 @@ if not st.session_state["auth"]:
     login_page()
     st.stop()
 
-# After login styles
+# After-login CSS (borders for all text inputs + app chrome)
 st.markdown("""
 <style>
 :root { --brand:#b91c1c; --green:#16a34a; --red:#b91c1c; }
 .topbar { position:sticky; top:0; z-index:5; background:#fff; padding:6px 0 8px; border-bottom:1px solid #eee; margin-bottom:8px; }
 .topbar-inner { display:flex; justify-content:space-between; align-items:center; }
 .who { color:#6b7280; font-size:14px; }
+
 .th-row { background:#f3f4f6; border:1px solid #e5e7eb; border-bottom:0; padding:10px 12px; border-radius:10px 10px 0 0; font-weight:700; display:grid; }
 .tb { border:1px solid #e5e7eb; border-top:0; border-radius:0 0 10px 10px; }
 .cell { padding:10px 12px; border-top:1px solid #e5e7eb; }
+
 .chip { display:inline-block; padding:4px 10px; border-radius:999px; color:#fff; font-size:12px; }
 .chip-pending { background:#9ca3af; } .chip-ok { background:#16a34a; } .chip-bad { background:#b91c1c; }
+
 .btn-wrap button { background:#f9fafb !important; color:#111827 !important; border:1px solid #e5e7eb !important; border-radius:8px !important; padding:.45rem .9rem !important; font-weight:600 !important; }
 .btn-wrap.on-validate button { background:var(--green)!important; color:#fff!important; }
 .btn-wrap.on-reject button { background:var(--red)!important; color:#fff!important; }
+
 .accept-btn .stButton>button { background:#b91c1c !important; color:#fff !important; border:none !important; border-radius:10px !important; padding:.7rem 1.3rem !important; font-weight:700 !important; box-shadow:none !important; }
 .accept-btn .stButton>button:hover { filter:brightness(.92); }
 .centered { display:flex; justify-content:center; }
+
+/* Borders for all text inputs & textareas post-login */
+.stTextInput > div > div,
+.stTextArea  > div > div {
+  border:1.4px solid #e5e7eb !important;
+  border-radius:8px !important;
+  background:#fff !important;
+  box-shadow:none !important;
+}
+.stTextInput input,
+.stTextArea  textarea {
+  padding:10px 12px !important;
+  background:transparent !important;
+  color:#111 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
