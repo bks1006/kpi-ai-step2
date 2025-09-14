@@ -321,6 +321,42 @@ def extract_kpis(text):
     df = dedup_rows(df)
     return df if not df.empty else pd.DataFrame(columns=cols)
 
+# ---------- Description generator for Recommended KPIs ----------
+RECOMMENDED_DESC = {
+    # JD/ATS
+    "JD Parsing Accuracy": "Percentage of job descriptions correctly parsed into structured fields.",
+    "Skills Extraction Precision": "Precision of the skills extraction model on annotated JD/resume samples.",
+    "Resume Matching Accuracy": "Share of candidate-resume matches correctly ranked in the top results.",
+    "JD-Resume Match Score": "Average relevance score between a job description and shortlisted resumes.",
+    "Average Screening Time": "Average time recruiters take to screen a candidate profile.",
+    "Response Latency": "Average system response time for JD/ATS actions and searches.",
+    "Concurrent Users Supported": "Maximum number of users supported concurrently without degradation.",
+    "System Uptime": "Percent of time the platform is available to users in a period.",
+    # Core HR
+    "Voluntary Attrition Rate": "Share of employees who leave voluntarily within the period.",
+    "Involuntary Attrition Rate": "Share of separations initiated by the employer within the period.",
+    "Employee Retention Rate": "Percent of employees retained over a 12-month period.",
+    "First Year Attrition Rate": "Share of new hires leaving within their first 12 months.",
+    "Average Tenure": "Average length of service for active employees.",
+    "Internal Mobility Rate": "Percent of roles filled by internal candidates.",
+    "Absenteeism Rate": "Unplanned absence days as a percentage of total scheduled days.",
+    "Employee Satisfaction Score": "Average score from periodic satisfaction/engagement surveys.",
+    "Employee NPS": "Employee Net Promoter Score from pulse or annual surveys.",
+    "Time to Fill": "Average number of days between job posting and offer acceptance.",
+    "Time to Hire": "Average number of days between candidate application and offer acceptance.",
+    "Offer Acceptance Rate": "Percent of offers accepted by candidates.",
+    "Quality of Hire": "Composite index of performance, retention, and cultural fit of new hires.",
+    "Cost per Hire": "Average end-to-end recruiting cost to make a hire.",
+}
+
+def generate_description(kpi_name: str, topic: str | None) -> str:
+    # Priority: hard-coded mapping; otherwise short generic template
+    if kpi_name in RECOMMENDED_DESC:
+        return RECOMMENDED_DESC[kpi_name]
+    # Fallback short generic
+    base = kpi_name.rstrip(".")
+    return f"Standard definition for {base} measured consistently across the period."
+
 # ---------- Recommendations ----------
 TOPIC_KPIS = {
     "attrition_retention": [
@@ -373,7 +409,7 @@ def recommend(domain, existing, topic=None, raw_text=""):
         if k.lower() in existing_l or k.lower() in seen: continue
         out.append(k); seen.add(k.lower())
         if len(out) >= 12: break
-    return out
+    return out, topic
 
 # ---------- UI helpers ----------
 def _table_head(cols, headers):
@@ -424,7 +460,7 @@ def render_recommended_table(brd, df, key_prefix):
     if df.empty:
         st.caption("No recommendations.")
         return df
-    # Add Description column for recommended KPIs
+    # KPI Name is READ-ONLY now; Description is editable
     _table_head(
         ["2fr","2.5fr","1fr","1fr","0.8fr","1.6fr"],
         ["KPI Name","Description","Owner/ SME","Target Value","Status","Actions"]
@@ -432,7 +468,7 @@ def render_recommended_table(brd, df, key_prefix):
     updated = []
     for i, r in df.iterrows():
         c1, c2, c3, c4, c5, c6 = st.columns([2,2.5,1,1,0.8,1.6])
-        with c1: kpi_name = st.text_input("", value=r["KPI Name"], key=f"{key_prefix}_name_{i}")
+        with c1: st.markdown(f"<div class='cell'><b>{r['KPI Name']}</b></div>", unsafe_allow_html=True)
         with c2: desc_val = st.text_input("", value=r.get("Description",""), key=f"{key_prefix}_desc_{i}")
         with c3: owner_val = st.text_input("", value=r.get("Owner/ SME",""), key=f"{key_prefix}_owner_{i}")
         with c4: target_val = st.text_input("", value=r.get("Target Value",""), key=f"{key_prefix}_target_{i}")
@@ -443,7 +479,7 @@ def render_recommended_table(brd, df, key_prefix):
                 r["Status"] = "Validated"
                 _upsert_final(brd, {
                     "BRD": brd,
-                    "KPI Name": kpi_name,
+                    "KPI Name": r["KPI Name"],
                     "Source": "Recommended",
                     "Description": desc_val,
                     "Owner/ SME": owner_val,
@@ -451,11 +487,11 @@ def render_recommended_table(brd, df, key_prefix):
                 })
             if colC.button("Reject", key=f"{key_prefix}_rej_{i}"):
                 r["Status"] = "Rejected"
-                _remove_from_final(brd, kpi_name)
+                _remove_from_final(brd, r["KPI Name"])
             st.markdown(_action_pill(r["Status"]), unsafe_allow_html=True)
 
         updated.append({
-            "KPI Name": kpi_name,
+            "KPI Name": r["KPI Name"],
             "Description": desc_val,
             "Owner/ SME": owner_val,
             "Target Value": target_val,
@@ -465,13 +501,14 @@ def render_recommended_table(brd, df, key_prefix):
     return pd.DataFrame(updated, columns=list(df.columns))
 
 # ---------- Manual KPI adder (Recommended section) ----------
-def manual_kpi_adder(brd):
-    """Inline form to manually add a KPI into the Recommended table for this BRD."""
+def manual_kpi_adder(brd, topic):
     st.markdown("#### Add KPI manually")
     with st.form(key=f"manual_add_{brd}", clear_on_submit=True):
         c1, c2 = st.columns([2,2])
         kpi_name = c1.text_input("KPI Name *", value="")
-        desc     = c2.text_input("Description", value="")
+        # pre-fill description from generator as you type (best effort)
+        suggested_desc = generate_description(kpi_name.strip(), topic) if kpi_name.strip() else ""
+        desc     = c2.text_input("Description", value=suggested_desc)
         c3, c4 = st.columns([1,1])
         owner    = c3.text_input("Owner/ SME", value="")
         target   = c4.text_input("Target Value", value="")
@@ -481,7 +518,6 @@ def manual_kpi_adder(brd):
             st.warning("Please enter a KPI Name.")
             return
         rec_df = st.session_state["projects"][brd]["recommended"]
-        # dedupe across recommended & extracted (case-insensitive)
         all_existing = set([x.lower() for x in rec_df["KPI Name"].astype(str).tolist()])
         ext_df = st.session_state["projects"][brd]["extracted"]
         all_existing |= set([x.lower() for x in ext_df["KPI Name"].astype(str).tolist()])
@@ -490,7 +526,7 @@ def manual_kpi_adder(brd):
             return
         new_row = {
             "KPI Name": kpi_name.strip(),
-            "Description": desc.strip(),
+            "Description": (desc.strip() or generate_description(kpi_name.strip(), topic)),
             "Owner/ SME": owner.strip(),
             "Target Value": target.strip(),
             "Status": "Pending"
@@ -498,7 +534,7 @@ def manual_kpi_adder(brd):
         rec_df = pd.concat([rec_df, pd.DataFrame([new_row])], ignore_index=True)
         st.session_state["projects"][brd]["recommended"] = rec_df
         st.success("KPI added to Recommended.")
-        st.rerun()  # show it immediately
+        st.rerun()
 
 # ---------- Pipeline per file ----------
 def process_file(file):
@@ -508,11 +544,19 @@ def process_file(file):
 
     extracted = extract_kpis(text)
     existing = extracted["KPI Name"].astype(str).tolist() if not extracted.empty else []
-    recs = recommend(domain, existing, topic=topic, raw_text=text)
-    recommended = pd.DataFrame(
-        [{"KPI Name": r, "Description": "", "Owner/ SME": "", "Target Value": "", "Status": "Pending"} for r in recs],
-        columns=["KPI Name", "Description", "Owner/ SME", "Target Value", "Status"]
-    )
+    recs, topic = recommend(domain, existing, topic=topic, raw_text=text)
+
+    # Build recommended with auto-descriptions
+    rows = []
+    for r in recs:
+        rows.append({
+            "KPI Name": r,
+            "Description": generate_description(r, topic),
+            "Owner/ SME": "",
+            "Target Value": "",
+            "Status": "Pending"
+        })
+    recommended = pd.DataFrame(rows, columns=["KPI Name", "Description", "Owner/ SME", "Target Value", "Status"])
 
     st.session_state["projects"][file.name] = {
         "domain": domain, "topic": topic,
@@ -544,8 +588,8 @@ for fname, proj in st.session_state["projects"].items():
     proj["extracted"] = render_extracted_table(fname, proj["extracted"], key_prefix=f"ext_{fname}")
 
     st.subheader("Recommended KPIs")
-    # show manual add first so new rows appear instantly
-    manual_kpi_adder(fname)
+    # Manual add FIRST so new rows appear instantly
+    manual_kpi_adder(fname, proj.get("topic"))
     proj["recommended"] = render_recommended_table(fname, proj["recommended"], key_prefix=f"rec_{fname}")
 
     st.markdown("<div class='kpi-header'>Finalized KPIs (This BRD)</div>", unsafe_allow_html=True)
