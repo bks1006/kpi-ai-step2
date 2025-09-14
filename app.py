@@ -47,7 +47,7 @@ VALID_USERS = {
 }
 
 # ---------- Page setup ----------
-st.set_page_config(page_title="AI KPI System (LLM)", layout="wide")
+st.set_page_config(page_title="AI KPI System", layout="wide")
 
 # ---------- Styles ----------
 st.markdown(
@@ -627,4 +627,5 @@ for fname, proj in st.session_state.projects.items():
             if st.button("Review & Accept", key=f"accept_{fname}"):
                 st.success("✅ Finalized KPIs have been accepted successfully!")
             st.markdown("</div>", unsafe_allow_html=True)
+
 
