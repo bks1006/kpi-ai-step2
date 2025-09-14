@@ -97,7 +97,6 @@ def read_text_from_bytes(data, name):
     bio = io.BytesIO(data)
 
     if lname.endswith(".pdf"):
-        # native text
         try:
             reader = PdfReader(bio)
             txt = "\n".join((p.extract_text() or "") for p in reader.pages)
@@ -105,7 +104,6 @@ def read_text_from_bytes(data, name):
                 return txt
         except Exception:
             pass
-        # OCR fallback
         if OCR_AVAILABLE:
             try:
                 imgs = convert_from_bytes(data)
@@ -323,7 +321,6 @@ def extract_kpis(text):
 
 # ---------- Description generator for Recommended KPIs ----------
 RECOMMENDED_DESC = {
-    # JD/ATS
     "JD Parsing Accuracy": "Percentage of job descriptions correctly parsed into structured fields.",
     "Skills Extraction Precision": "Precision of the skills extraction model on annotated JD/resume samples.",
     "Resume Matching Accuracy": "Share of candidate-resume matches correctly ranked in the top results.",
@@ -332,7 +329,6 @@ RECOMMENDED_DESC = {
     "Response Latency": "Average system response time for JD/ATS actions and searches.",
     "Concurrent Users Supported": "Maximum number of users supported concurrently without degradation.",
     "System Uptime": "Percent of time the platform is available to users in a period.",
-    # Core HR
     "Voluntary Attrition Rate": "Share of employees who leave voluntarily within the period.",
     "Involuntary Attrition Rate": "Share of separations initiated by the employer within the period.",
     "Employee Retention Rate": "Percent of employees retained over a 12-month period.",
@@ -350,10 +346,8 @@ RECOMMENDED_DESC = {
 }
 
 def generate_description(kpi_name: str, topic: str | None) -> str:
-    # Priority: hard-coded mapping; otherwise short generic template
     if kpi_name in RECOMMENDED_DESC:
         return RECOMMENDED_DESC[kpi_name]
-    # Fallback short generic
     base = kpi_name.rstrip(".")
     return f"Standard definition for {base} measured consistently across the period."
 
@@ -460,7 +454,7 @@ def render_recommended_table(brd, df, key_prefix):
     if df.empty:
         st.caption("No recommendations.")
         return df
-    # KPI Name is READ-ONLY now; Description is editable
+    # KPI Name & Description are READ-ONLY now
     _table_head(
         ["2fr","2.5fr","1fr","1fr","0.8fr","1.6fr"],
         ["KPI Name","Description","Owner/ SME","Target Value","Status","Actions"]
@@ -469,7 +463,7 @@ def render_recommended_table(brd, df, key_prefix):
     for i, r in df.iterrows():
         c1, c2, c3, c4, c5, c6 = st.columns([2,2.5,1,1,0.8,1.6])
         with c1: st.markdown(f"<div class='cell'><b>{r['KPI Name']}</b></div>", unsafe_allow_html=True)
-        with c2: desc_val = st.text_input("", value=r.get("Description",""), key=f"{key_prefix}_desc_{i}")
+        with c2: st.markdown(f"<div class='cell'>{r.get('Description','')}</div>", unsafe_allow_html=True)
         with c3: owner_val = st.text_input("", value=r.get("Owner/ SME",""), key=f"{key_prefix}_owner_{i}")
         with c4: target_val = st.text_input("", value=r.get("Target Value",""), key=f"{key_prefix}_target_{i}")
         with c5: st.markdown(f"<div class='cell'>{_status_badge(r['Status'])}</div>", unsafe_allow_html=True)
@@ -481,7 +475,7 @@ def render_recommended_table(brd, df, key_prefix):
                     "BRD": brd,
                     "KPI Name": r["KPI Name"],
                     "Source": "Recommended",
-                    "Description": desc_val,
+                    "Description": r.get("Description",""),
                     "Owner/ SME": owner_val,
                     "Target Value": target_val
                 })
@@ -492,7 +486,7 @@ def render_recommended_table(brd, df, key_prefix):
 
         updated.append({
             "KPI Name": r["KPI Name"],
-            "Description": desc_val,
+            "Description": r.get("Description",""),
             "Owner/ SME": owner_val,
             "Target Value": target_val,
             "Status": r["Status"]
@@ -504,11 +498,11 @@ def render_recommended_table(brd, df, key_prefix):
 def manual_kpi_adder(brd, topic):
     st.markdown("#### Add KPI manually")
     with st.form(key=f"manual_add_{brd}", clear_on_submit=True):
-        c1, c2 = st.columns([2,2])
-        kpi_name = c1.text_input("KPI Name *", value="")
-        # pre-fill description from generator as you type (best effort)
+        kpi_name = st.text_input("KPI Name *", value="")
+        # description is auto-generated (read-only preview)
         suggested_desc = generate_description(kpi_name.strip(), topic) if kpi_name.strip() else ""
-        desc     = c2.text_input("Description", value=suggested_desc)
+        if suggested_desc:
+            st.caption(f"Auto description: {suggested_desc}")
         c3, c4 = st.columns([1,1])
         owner    = c3.text_input("Owner/ SME", value="")
         target   = c4.text_input("Target Value", value="")
@@ -526,7 +520,7 @@ def manual_kpi_adder(brd, topic):
             return
         new_row = {
             "KPI Name": kpi_name.strip(),
-            "Description": (desc.strip() or generate_description(kpi_name.strip(), topic)),
+            "Description": generate_description(kpi_name.strip(), topic),
             "Owner/ SME": owner.strip(),
             "Target Value": target.strip(),
             "Status": "Pending"
@@ -546,7 +540,6 @@ def process_file(file):
     existing = extracted["KPI Name"].astype(str).tolist() if not extracted.empty else []
     recs, topic = recommend(domain, existing, topic=topic, raw_text=text)
 
-    # Build recommended with auto-descriptions
     rows = []
     for r in recs:
         rows.append({
@@ -588,7 +581,6 @@ for fname, proj in st.session_state["projects"].items():
     proj["extracted"] = render_extracted_table(fname, proj["extracted"], key_prefix=f"ext_{fname}")
 
     st.subheader("Recommended KPIs")
-    # Manual add FIRST so new rows appear instantly
     manual_kpi_adder(fname, proj.get("topic"))
     proj["recommended"] = render_recommended_table(fname, proj["recommended"], key_prefix=f"rec_{fname}")
 
