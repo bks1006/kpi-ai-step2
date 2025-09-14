@@ -1,4 +1,5 @@
 import io
+import re
 import pandas as pd
 import streamlit as st
 
@@ -196,38 +197,132 @@ def read_text_from_bytes(data: bytes, name: str) -> str:
 def read_uploaded(file) -> str:
     return read_text_from_bytes(file.read(), file.name)
 
+# ---------- Domain library ----------
+KPI_LIB = {
+    "hr": [
+        ("Voluntary Attrition Rate", "Percent of employees who resign voluntarily within a period."),
+        ("Involuntary Attrition Rate", "Percent of exits due to termination or layoffs."),
+        ("Employee Retention Rate", "Percent retained year-over-year."),
+        ("First Year Attrition Rate", "Exits within the first 12 months of employment."),
+        ("Offer Acceptance Rate", "Accepted offers divided by total offers extended.")
+    ],
+    "finance": [
+        ("Gross Margin", "Revenue minus COGS as a percentage of revenue."),
+        ("Operating Expense Ratio", "Opex divided by revenue."),
+        ("Days Sales Outstanding (DSO)", "Average days to collect receivables."),
+        ("Forecast Accuracy", "Error between forecast and actuals as percentage."),
+        ("Revenue Growth Rate", "Period-over-period revenue growth.")
+    ],
+    "sales": [
+        ("Lead-to-Opportunity Rate", "Percent of leads converting to opportunities."),
+        ("Opportunity Win Rate", "Percent of won opportunities."),
+        ("Average Deal Size", "Mean revenue per won deal."),
+        ("Sales Cycle Length", "Median days from lead to close."),
+        ("Pipeline Coverage", "Pipeline value vs quota for next quarter.")
+    ],
+    "product": [
+        ("Feature Adoption Rate", "Active users adopting the new feature over total active users."),
+        ("DAU/MAU", "Daily-to-monthly active users ratio."),
+        ("Activation Rate", "Users reaching the defined activation milestone."),
+        ("Churn Rate", "Percent of users who stop using the product."),
+        ("NPS", "Net Promoter Score from customer survey.")
+    ],
+    "support": [
+        ("First Response Time", "Median time to first agent response."),
+        ("Resolution Time (Median)", "Median time to resolve a ticket."),
+        ("First Contact Resolution", "Percent resolved in the first interaction."),
+        ("Backlog Volume", "Open tickets pending at period end."),
+        ("Customer Satisfaction (CSAT)", "Post-resolution satisfaction score.")
+    ]
+}
+
+DOMAIN_HINTS = {
+    "hr": ["employee", "attrition", "recruit", "hiring", "talent", "workforce", "hr", "people"],
+    "finance": ["revenue", "margin", "opex", "forecast", "account", "invoice", "cash", "finance", "p&l"],
+    "sales": ["lead", "crm", "pipeline", "opportunity", "quota", "deal", "salesforce", "sales"],
+    "product": ["feature", "release", "adoption", "activation", "retention", "cohort", "nps", "product"],
+    "support": ["ticket", "sla", "response time", "backlog", "support", "csat", "zendesk", "service desk"]
+}
+
+def detect_domain(text: str) -> str:
+    low = text.lower()
+    scores = {d: 0 for d in DOMAIN_HINTS}
+    for dom, hints in DOMAIN_HINTS.items():
+        for h in hints:
+            scores[dom] += len(re.findall(rf"\b{re.escape(h)}\b", low))
+    # pick best, default to hr if all zero
+    domain = max(scores, key=scores.get)
+    return domain if scores[domain] > 0 else "hr"
+
 # ---------- Extraction / Recommendation ----------
 def extract_kpis(text: str) -> pd.DataFrame:
-    rows = []
+    """
+    Heuristic: detect domain, then select KPIs whose trigger words appear.
+    We also try to read explicit lines like 'KPI: <name>' or bullet lines with 'rate/%/time'.
+    """
+    domain = detect_domain(text)
     low = text.lower()
-    if "attrition" in low or "retention" in low:
-        rows.append({
-            "KPI Name":"Voluntary Attrition Rate",
-            "Description":"Track voluntary attrition; target a 10% reduction in 12 months.",
-            "Target Value":"10% reduction in 12 months",
-            "Status":"Pending"
-        })
-    rows.append({
-        "KPI Name":"System Uptime",
-        "Description":"Ensure service availability and scalability to minimize downtime.",
-        "Target Value":"99.9%",
-        "Status":"Pending"
-    })
+
+    # explicit mentions
+    explicit = set()
+    for name, _ in KPI_LIB[domain]:
+        if re.search(rf"\b{name.lower()}\b", low):
+            explicit.add(name)
+
+    # signal lines
+    signal_lines = []
+    for line in re.split(r"[\r\n]+", text):
+        if any(tok in line.lower() for tok in ["kpi", "rate", "%", "time", "ratio", "churn", "retention", "attrition", "margin", "ds0", "dso"]):
+            signal_lines.append(line.strip())
+
+    # score KPIs by presence of their key words
+    scores = {}
+    for name, desc in KPI_LIB[domain]:
+        key = name.lower().split()[0]  # crude but useful
+        s = len(re.findall(re.escape(key), low))
+        s += sum(1 for ln in signal_lines if key in ln.lower())
+        if name in explicit:
+            s += 3
+        if s > 0:
+            scores[name] = s
+
+    # choose top 2–4 depending on signals, else pick 2 defaults for the domain
+    picked = sorted(scores.keys(), key=lambda k: scores[k], reverse=True)[:4]
+    if not picked:
+        # domain defaults that are widely useful
+        defaults = {
+            "hr": ["Voluntary Attrition Rate", "Employee Retention Rate"],
+            "finance": ["Gross Margin", "Forecast Accuracy"],
+            "sales": ["Opportunity Win Rate", "Sales Cycle Length"],
+            "product": ["Feature Adoption Rate", "Activation Rate"],
+            "support": ["First Response Time", "Resolution Time (Median)"]
+        }
+        picked = defaults[domain]
+
+    rows = []
+    for name, desc in KPI_LIB[domain]:
+        if name in picked:
+            rows.append({
+                "KPI Name": name,
+                "Description": desc,
+                "Target Value": "",
+                "Status": "Pending"
+            })
     return pd.DataFrame(rows)
 
 def recommend(domain: str, existing: list, topic: str = None, raw_text: str = "") -> list:
+    """
+    Recommend KPIs from the same detected domain, excluding those already extracted.
+    """
+    if not domain:
+        domain = detect_domain(raw_text)
     pool = [
-        ("Involuntary Attrition Rate",
-         "Attrition due to terminations/layoffs; compare to prior quarter; split by org."),
-        ("Employee Retention Rate",
-         "Percent of employees retained year-over-year; slice by department and tenure."),
-        ("First Year Attrition Rate",
-         "Attrition within first 12 months; signals onboarding or hiring quality issues.")
-    ]
-    return [
         {"KPI Name": k, "Description": d, "Owner/ SME": "", "Target Value": "", "Status": "Pending"}
-        for k, d in pool if k not in existing
+        for k, d in KPI_LIB[domain]
+        if k not in existing
     ]
+    # limit to 3–5 sensible suggestions
+    return pool[:5]
 
 # ---------- Table helpers ----------
 def _table_head(col_template: str, headers: list[str]):
@@ -372,11 +467,12 @@ def manual_kpi_adder(brd):
 # ---------- Pipeline ----------
 def process_file(file):
     text = read_uploaded(file)
+    domain = detect_domain(text)
     extracted = extract_kpis(text)
-    recs = recommend("hr", extracted["KPI Name"].tolist(), raw_text=text)
+    recs = recommend(domain, extracted["KPI Name"].tolist(), raw_text=text)
     recommended = pd.DataFrame(recs)
     st.session_state.projects[file.name] = {
-        "extracted": extracted, "recommended": recommended
+        "extracted": extracted, "recommended": recommended, "domain": domain
     }
     st.session_state["final_kpis"].setdefault(
         file.name, pd.DataFrame(columns=["BRD","KPI Name","Source","Description","Owner/ SME","Target Value"])
@@ -436,6 +532,7 @@ if st.button("Process BRDs"):
 # Show per BRD
 for fname, proj in st.session_state.projects.items():
     st.markdown(f"## 📄 {fname}")
+    st.caption(f"Detected domain: **{proj.get('domain','hr').upper()}**")
 
     st.subheader("Extracted KPIs")
     proj["extracted"] = render_extracted_table(fname, proj["extracted"], key_prefix=f"ext_{fname}")
