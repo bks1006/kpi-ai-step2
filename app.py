@@ -1,3 +1,4 @@
+# app.py
 import io, re, bcrypt
 import pandas as pd
 import streamlit as st
@@ -15,24 +16,32 @@ try:
 except Exception:
     OCR_AVAILABLE = False
 
+# ---------- Single page config ----------
+st.set_page_config(page_title="AI KPI System", layout="wide")
+
 
 # =========================
 #  AUTH / SIGN-IN GATE
 # =========================
 
-# Replace these with your own user hashes, or move to st.secrets["users"]
-# To generate a hash in a Python REPL:
-#   import bcrypt; bcrypt.hashpw(b"your_password", bcrypt.gensalt()).decode()
-USERS = {
-    # demo users (passwords: admin123, analyst123)
-    "admin@company.com": "$2b$12$JqGXeGYX5/3F/jqvC8vPcOK5U4m8wC7H1mQqvTfH7S1d1y8bJb6B6",
-    "analyst@company.com": "$2b$12$0xv3JX3n1Tccu7ztz7zN1eE9eJY2Z0Qv0C8W6r0U7jG3V1qK4H.ZK",
-}
+# Prefer users from Streamlit Secrets; otherwise fall back to demo + admin
+# st.secrets example:
+# [users]
+# me@example.com = "$2b$12$xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+USERS = dict(st.secrets.get("users", {}))
+if not USERS:
+    USERS = {
+        # demo account (email: demo@local, password: demo123)
+        "demo@local": bcrypt.hashpw(b"demo123", bcrypt.gensalt()).decode(),
+        # optional admin (email: admin@company.com, password: admin123)
+        "admin@company.com": bcrypt.hashpw(b"admin123", bcrypt.gensalt()).decode(),
+    }
 
-def _check_credentials(username: str, password: str) -> bool:
+def check_credentials(username: str, password: str) -> bool:
     if not username or not password:
         return False
-    h = USERS.get(username.strip().lower())
+    u = username.strip().lower()
+    h = USERS.get(u)
     if not h:
         return False
     try:
@@ -41,12 +50,11 @@ def _check_credentials(username: str, password: str) -> bool:
         return False
 
 def render_login():
-    st.set_page_config(page_title="Sign in — AI KPI System", layout="centered")
     st.markdown(
         """
         <style>
         .login-card {
-            max-width: 440px; margin: 10vh auto 0 auto; padding: 28px 28px 22px 28px;
+            max-width: 480px; margin: 10vh auto 0 auto; padding: 28px 28px 22px 28px;
             border: 1px solid #e5e7eb; border-radius: 14px; background: #ffffff;
             box-shadow: 0 6px 18px rgba(0,0,0,0.06);
         }
@@ -60,23 +68,32 @@ def render_login():
     st.write("Sign in to continue")
 
     with st.form("login_form", clear_on_submit=False):
-        u = st.text_input("Email")
-        p = st.text_input("Password", type="password")
-        ok = st.form_submit_button("Sign in")
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
+        submit = st.form_submit_button("Sign in")
 
-    if ok:
-        if _check_credentials(u, p):
+    if submit:
+        if check_credentials(email, password):
             st.session_state["auth"] = True
-            st.session_state["user"] = u.strip().lower()
+            st.session_state["user"] = email.strip().lower()
             st.success("Signed in successfully")
             st.experimental_rerun()
         else:
             st.error("Invalid email or password")
 
+    with st.expander("Need a bcrypt hash for your password?"):
+        raw = st.text_input("Type password to hash (not saved)", type="password", key="hashpw")
+        if st.button("Generate hash"):
+            if raw:
+                h = bcrypt.hashpw(raw.encode(), bcrypt.gensalt()).decode()
+                st.code(h, language="text")
+                st.info("Copy this into USERS or st.secrets['users'].")
+            else:
+                st.warning("Enter a password first.")
+
     st.markdown("</div>", unsafe_allow_html=True)
 
-
-# If not authed, show login and stop
+# Gate the app
 if not st.session_state.get("auth"):
     render_login()
     st.stop()
@@ -94,8 +111,6 @@ with st.sidebar:
 #  ORIGINAL APP BELOW
 # =========================
 
-# ---------- Page ----------
-st.set_page_config(page_title="AI KPI System", layout="wide")
 st.title("AI KPI Extraction & Recommendations (Per BRD)")
 
 # ---------- Theme (red + white) ----------
@@ -423,7 +438,6 @@ RECOMMENDED_DESC = {
     "Quality of Hire": "Composite index of performance, retention, and cultural fit of new hires.",
     "Cost per Hire": "Average end-to-end recruiting cost to make a hire.",
 }
-
 def generate_description(kpi_name: str, topic: str | None) -> str:
     if kpi_name in RECOMMENDED_DESC:
         return RECOMMENDED_DESC[kpi_name]
@@ -514,12 +528,8 @@ def render_extracted_table(brd, df, key_prefix):
             if colB.button("Validate", key=f"{key_prefix}_ok_{i}"):
                 r["Status"] = "Validated"
                 _upsert_final(brd, {
-                    "BRD": brd,
-                    "KPI Name": r["KPI Name"],
-                    "Source": "Extracted",
-                    "Description": r["Description"],
-                    "Owner/ SME": "",
-                    "Target Value": target_val
+                    "BRD": brd, "KPI Name": r["KPI Name"], "Source": "Extracted",
+                    "Description": r["Description"], "Owner/ SME": "", "Target Value": target_val
                 })
             if colC.button("Reject", key=f"{key_prefix}_rej_{i}"):
                 r["Status"] = "Rejected"
@@ -541,7 +551,7 @@ def render_recommended_table(brd, df, key_prefix):
     for i, r in df.iterrows():
         c1, c2, c3, c4, c5, c6 = st.columns([2,2.5,1,1,0.8,1.6])
         with c1: st.markdown(f"<div class='cell'><b>{r['KPI Name']}</b></div>", unsafe_allow_html=True)
-        with c2: st.markdown(f"<div class='cell'>{r.get('Description','')}</div>", unsafe_allow_html=True)  # READ-ONLY
+        with c2: st.markdown(f"<div class='cell'>{r.get('Description','')}</div>", unsafe_allow_html=True)  # read-only
         with c3: owner_val = st.text_input("", value=r.get("Owner/ SME",""), key=f"{key_prefix}_owner_{i}")
         with c4: target_val = st.text_input("", value=r.get("Target Value",""), key=f"{key_prefix}_target_{i}")
         with c5: st.markdown(f"<div class='cell'>{_status_badge(r['Status'])}</div>", unsafe_allow_html=True)
@@ -550,12 +560,8 @@ def render_recommended_table(brd, df, key_prefix):
             if colB.button("Validate", key=f"{key_prefix}_ok_{i}"):
                 r["Status"] = "Validated"
                 _upsert_final(brd, {
-                    "BRD": brd,
-                    "KPI Name": r["KPI Name"],
-                    "Source": "Recommended",
-                    "Description": r.get("Description",""),
-                    "Owner/ SME": owner_val,
-                    "Target Value": target_val
+                    "BRD": brd, "KPI Name": r["KPI Name"], "Source": "Recommended",
+                    "Description": r.get("Description",""), "Owner/ SME": owner_val, "Target Value": target_val
                 })
             if colC.button("Reject", key=f"{key_prefix}_rej_{i}"):
                 r["Status"] = "Rejected"
