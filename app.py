@@ -16,28 +16,22 @@ try:
 except Exception:
     OCR_AVAILABLE = False
 
-# ---------- Single page config ----------
+# ---------- Global page config ----------
 st.set_page_config(page_title="AI KPI System", layout="wide")
-
 
 # =========================
 #  AUTH / SIGN-IN GATE
 # =========================
 
 # Prefer users from Streamlit Secrets; otherwise fall back to demo + admin
-# st.secrets example:
-# [users]
-# me@example.com = "$2b$12$xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 USERS = dict(st.secrets.get("users", {}))
 if not USERS:
     USERS = {
-        # demo account (email: demo@local, password: demo123)
         "demo@local": bcrypt.hashpw(b"demo123", bcrypt.gensalt()).decode(),
-        # optional admin (email: admin@company.com, password: admin123)
         "admin@company.com": bcrypt.hashpw(b"admin123", bcrypt.gensalt()).decode(),
     }
 
-def check_credentials(username: str, password: str) -> bool:
+def _check_credentials(username: str, password: str) -> bool:
     if not username or not password:
         return False
     u = username.strip().lower()
@@ -50,6 +44,7 @@ def check_credentials(username: str, password: str) -> bool:
         return False
 
 def render_login():
+    # --- Styles for card and input highlighting ---
     st.markdown(
         """
         <style>
@@ -58,38 +53,81 @@ def render_login():
             border: 1px solid #e5e7eb; border-radius: 14px; background: #ffffff;
             box-shadow: 0 6px 18px rgba(0,0,0,0.06);
         }
-        .brand { color:#b91c1c; font-weight:800; font-size: 22px; letter-spacing: .2px; }
+        .brand { color:#b91c1c; font-weight:800; font-size: 22px; letter-spacing: .2px; margin-bottom: 4px; }
+
+        /* Default grey border */
+        .stTextInput > div > div > input {
+          border: 2px solid #d1d5db !important;
+          border-radius: 6px !important;
+          padding: 6px 8px !important;
+          background: #fff !important;
+        }
+        /* Red for invalid, Green for valid (we toggle these classes via JS) */
+        .stTextInput.input-error > div > div > input { border: 2px solid #dc2626 !important; }
+        .stTextInput.input-success > div > div > input { border: 2px solid #16a34a !important; }
         </style>
         """,
         unsafe_allow_html=True,
     )
+
     st.markdown("<div class='login-card'>", unsafe_allow_html=True)
     st.markdown("<div class='brand'>AI KPI System</div>", unsafe_allow_html=True)
     st.write("Sign in to continue")
 
-    with st.form("login_form", clear_on_submit=False):
-        email = st.text_input("Email")
-        password = st.text_input("Password", type="password")
-        submit = st.form_submit_button("Sign in")
+    email = st.text_input("Email", key="login_email")
+    password = st.text_input("Password", type="password", key="login_password")
 
-    if submit:
-        if check_credentials(email, password):
+    # Live validation flags
+    email_valid = bool(email.strip()) and (email.strip().lower() in USERS)
+    password_valid = False
+    if email.strip() and password:
+        h = USERS.get(email.strip().lower())
+        if h:
+            try:
+                password_valid = bcrypt.checkpw(password.encode(), h.encode())
+            except Exception:
+                password_valid = False
+
+    # Inject JS to toggle classes on the two input widgets
+    st.markdown(
+        f"""
+        <script>
+        (function() {{
+          const labels = window.parent.document.querySelectorAll('label');
+          let emailWrap = null, pwdWrap = null;
+
+          labels.forEach(l => {{
+            const t = (l.innerText || '').trim().toLowerCase();
+            if(t === 'email') emailWrap = l.closest('.stTextInput');
+            if(t === 'password') pwdWrap = l.closest('.stTextInput');
+          }});
+
+          function setState(el, state) {{
+            if(!el) return;
+            el.classList.remove('input-error','input-success');
+            if(state === 'error') el.classList.add('input-error');
+            if(state === 'success') el.classList.add('input-success');
+          }}
+
+          const emailState = {'"success"' if email_valid else ('"error"' if email.strip() else 'null')};
+          const pwdState = {'"success"' if password_valid else ('"error"' if password else 'null')};
+
+          setState(emailWrap, emailState);
+          setState(pwdWrap, pwdState);
+        }})();
+        </script>
+        """,
+        unsafe_allow_html=True
+    )
+
+    if st.button("Sign in"):
+        if _check_credentials(email, password):
             st.session_state["auth"] = True
             st.session_state["user"] = email.strip().lower()
             st.success("Signed in successfully")
             st.experimental_rerun()
         else:
             st.error("Invalid email or password")
-
-    with st.expander("Need a bcrypt hash for your password?"):
-        raw = st.text_input("Type password to hash (not saved)", type="password", key="hashpw")
-        if st.button("Generate hash"):
-            if raw:
-                h = bcrypt.hashpw(raw.encode(), bcrypt.gensalt()).decode()
-                st.code(h, language="text")
-                st.info("Copy this into USERS or st.secrets['users'].")
-            else:
-                st.warning("Enter a password first.")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -106,9 +144,8 @@ with st.sidebar:
             if k in st.session_state: del st.session_state[k]
         st.experimental_rerun()
 
-
 # =========================
-#  ORIGINAL APP BELOW
+#  KPI APP
 # =========================
 
 st.title("AI KPI Extraction & Recommendations (Per BRD)")
@@ -134,17 +171,6 @@ st.markdown(
     .badge-pending { background:#9ca3af; }
     .badge-validated { background:#16a34a; }
     .badge-rejected { background:#b91c1c; }
-
-    .pill { display:inline-block; margin-top:6px; padding:6px 10px; border-radius:8px; font-weight:600; }
-    .pill-green { background:#16a34a; color:#fff; }
-    .pill-red { background:#b91c1c; color:#fff; }
-    .pill-gray { background:#e5e7eb; color:#111827; }
-
-    button[data-testid="baseButton-secondary"]{
-        background:#f3f4f6 !important; color:#111827 !important; border:1px solid #e5e7eb !important;
-        border-radius:8px !important; padding:6px 12px !important;
-    }
-    button[data-testid="baseButton-secondary"]:hover { background:#e5e7eb !important; }
     </style>
     """,
     unsafe_allow_html=True
@@ -161,11 +187,6 @@ def _status_badge(s):
     if s == "Validated": cls = "badge-validated"
     elif s == "Rejected": cls = "badge-rejected"
     return f"<span class='badge {cls}'>{s}</span>"
-
-def _action_pill(status):
-    if status == "Validated": return "<span class='pill pill-green'>Validated</span>"
-    if status == "Rejected":  return "<span class='pill pill-red'>Rejected</span>"
-    return "<span class='pill pill-gray'>Pending</span>"
 
 def _upsert_final(brd, row):
     df = st.session_state["final_kpis"].get(
@@ -498,7 +519,7 @@ def recommend(domain, existing, topic=None, raw_text=""):
         if len(out) >= 12: break
     return out, topic
 
-# ---------- UI helpers ----------
+# ---------- Table helpers ----------
 def _table_head(cols, headers):
     st.markdown(
         "<div class='table-head' style='display:grid;grid-template-columns:" +
@@ -511,62 +532,68 @@ def _table_head(cols, headers):
 def _table_tail():
     st.markdown("</div>", unsafe_allow_html=True)
 
+# FIXED: buttons + status chip stay on same row (no extra line)
 def render_extracted_table(brd, df, key_prefix):
     if df.empty:
         st.caption("No extracted KPIs.")
         return df
-    _table_head(["2fr","3fr","1fr","0.9fr","1.6fr"], ["KPI Name","Description","Target Value","Status","Actions"])
+    _table_head(["2fr","3fr","1.1fr","0.9fr","1.9fr"], ["KPI Name","Description","Target Value","Status","Actions"])
     updated = []
     for i, r in df.iterrows():
-        c1, c2, c3, c4, c5 = st.columns([2,3,1,0.9,1.6])
+        c1, c2, c3, c4, c5 = st.columns([2,3,1.1,0.9,1.9])
         with c1: st.markdown(f"<div class='cell'><b>{r['KPI Name']}</b></div>", unsafe_allow_html=True)
         with c2: st.markdown(f"<div class='cell'>{r['Description']}</div>", unsafe_allow_html=True)
-        with c3: target_val = st.text_input("", value=r["Target Value"], key=f"{key_prefix}_target_{i}")
-        with c4: st.markdown(f"<div class='cell'>{_status_badge(r['Status'])}</div>", unsafe_allow_html=True)
+        with c3:
+            target_val = st.text_input("", value=r["Target Value"], key=f"{key_prefix}_target_{i}")
+        with c4:
+            st.markdown(f"<div class='cell'>{_status_badge(r['Status'])}</div>", unsafe_allow_html=True)
         with c5:
-            colB, colC = st.columns([1,1])
-            if colB.button("Validate", key=f"{key_prefix}_ok_{i}"):
+            b1, b2, chip = st.columns([1,1,1])
+            if b1.button("Validate", key=f"{key_prefix}_ok_{i}"):
                 r["Status"] = "Validated"
                 _upsert_final(brd, {
                     "BRD": brd, "KPI Name": r["KPI Name"], "Source": "Extracted",
                     "Description": r["Description"], "Owner/ SME": "", "Target Value": target_val
                 })
-            if colC.button("Reject", key=f"{key_prefix}_rej_{i}"):
+            if b2.button("Reject", key=f"{key_prefix}_rej_{i}"):
                 r["Status"] = "Rejected"
                 _remove_from_final(brd, r["KPI Name"])
-            st.markdown(_action_pill(r["Status"]), unsafe_allow_html=True)
+            with chip:
+                st.markdown(_status_badge(r["Status"]), unsafe_allow_html=True)
         updated.append({"KPI Name": r["KPI Name"], "Description": r["Description"], "Target Value": target_val, "Status": r["Status"]})
     _table_tail()
     return pd.DataFrame(updated, columns=list(df.columns))
 
+# FIXED: buttons + status chip aligned in same row
 def render_recommended_table(brd, df, key_prefix):
     if df.empty:
         st.caption("No recommendations.")
         return df
     _table_head(
-        ["2fr","2.5fr","1fr","1fr","0.8fr","1.6fr"],
+        ["2fr","2.5fr","1fr","1fr","0.8fr","2.2fr"],
         ["KPI Name","Description","Owner/ SME","Target Value","Status","Actions"]
     )
     updated = []
     for i, r in df.iterrows():
-        c1, c2, c3, c4, c5, c6 = st.columns([2,2.5,1,1,0.8,1.6])
+        c1, c2, c3, c4, c5, c6 = st.columns([2,2.5,1,1,0.8,2.2])
         with c1: st.markdown(f"<div class='cell'><b>{r['KPI Name']}</b></div>", unsafe_allow_html=True)
-        with c2: st.markdown(f"<div class='cell'>{r.get('Description','')}</div>", unsafe_allow_html=True)  # read-only
-        with c3: owner_val = st.text_input("", value=r.get("Owner/ SME",""), key=f"{key_prefix}_owner_{i}")
+        with c2: st.markdown(f"<div class='cell'>{r.get('Description','')}</div>", unsafe_allow_html=True)
+        with c3: owner_val  = st.text_input("", value=r.get("Owner/ SME",""), key=f"{key_prefix}_owner_{i}")
         with c4: target_val = st.text_input("", value=r.get("Target Value",""), key=f"{key_prefix}_target_{i}")
         with c5: st.markdown(f"<div class='cell'>{_status_badge(r['Status'])}</div>", unsafe_allow_html=True)
         with c6:
-            colB, colC = st.columns([1,1])
-            if colB.button("Validate", key=f"{key_prefix}_ok_{i}"):
+            b1, b2, chip = st.columns([1,1,1])
+            if b1.button("Validate", key=f"{key_prefix}_ok_{i}"):
                 r["Status"] = "Validated"
                 _upsert_final(brd, {
                     "BRD": brd, "KPI Name": r["KPI Name"], "Source": "Recommended",
                     "Description": r.get("Description",""), "Owner/ SME": owner_val, "Target Value": target_val
                 })
-            if colC.button("Reject", key=f"{key_prefix}_rej_{i}"):
+            if b2.button("Reject", key=f"{key_prefix}_rej_{i}"):
                 r["Status"] = "Rejected"
                 _remove_from_final(brd, r["KPI Name"])
-            st.markdown(_action_pill(r["Status"]), unsafe_allow_html=True)
+            with chip:
+                st.markdown(_status_badge(r["Status"]), unsafe_allow_html=True)
 
         updated.append({
             "KPI Name": r["KPI Name"],
