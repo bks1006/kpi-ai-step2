@@ -24,11 +24,11 @@ st.markdown(
     """
     <style>
     :root { --brand:#b91c1c; }
-    .stTextInput>div>div>input, .stSelectbox>div>div>select {
-        border:1.5px solid var(--brand); border-radius:6px; padding:6px 8px; background:#fff;
+    .stTextInput>div>div>input, .stSelectbox>div>div>select, textarea.stTextArea {
+        border:1.5px solid var(--brand) !important; border-radius:6px !important; background:#fff !important;
     }
-    .stTextInput>div>div>input:focus, .stSelectbox>div>div>select:focus {
-        border:2px solid var(--brand) !important; outline:none !important; box-shadow:0 0 5px var(--brand);
+    .stTextInput>div>div>input:focus, .stSelectbox>div>div>select:focus, textarea.stTextArea:focus {
+        border:2px solid var(--brand) !important; outline:none !important; box-shadow:0 0 5px var(--brand) !important;
     }
 
     .kpi-header { background:#b91c1c; color:#fff; padding:10px 12px; border-radius:8px 8px 0 0; font-weight:700; }
@@ -91,13 +91,13 @@ def _remove_from_final(brd, kpi_name):
         df = df[df["KPI Name"] != kpi_name].reset_index(drop=True)
     st.session_state["final_kpis"][brd] = df
 
-# ---------- File reading (PDF+OCR, DOCX) ----------
+# ---------- File reading (PDF + OCR, DOCX) ----------
 def read_text_from_bytes(data, name):
     lname = name.lower()
     bio = io.BytesIO(data)
 
     if lname.endswith(".pdf"):
-        # Native text
+        # native text
         try:
             reader = PdfReader(bio)
             txt = "\n".join((p.extract_text() or "") for p in reader.pages)
@@ -223,6 +223,7 @@ def find_targets(s):
     return " | ".join(dict.fromkeys(hits))
 
 KPI_CANON = {
+    # JD/ATS & platform KPIs
     "JD Generation Time": [
         r"\bgenerate\b.{0,40}\bjd\b.{0,40}\b(sec|seconds|ms|milliseconds|time|latency)\b",
         r"\bjd (generation|creation) time\b"
@@ -239,6 +240,8 @@ KPI_CANON = {
     "JD-Resume Match Score": [r"\bmatch score\b"],
     "Average Screening Time": [r"\bscreening time\b", r"\bscreen time\b"],
     "Response Latency": [r"\blatency\b", r"\bresponse time\b"],
+
+    # Core HR
     "Voluntary Attrition Rate": [r"\bvoluntary attrition\b", r"\bvoluntary turnover\b"],
     "Involuntary Attrition Rate": [r"\binvoluntary attrition\b", r"\binvoluntary turnover\b"],
     "Employee Retention Rate": [r"\bretention rate\b", r"\bemployee retention\b"],
@@ -421,60 +424,81 @@ def render_recommended_table(brd, df, key_prefix):
     if df.empty:
         st.caption("No recommendations.")
         return df
-    _table_head(["2fr","1fr","1fr","0.8fr","1.6fr"], ["KPI Name","Owner/ SME","Target Value","Status","Actions"])
+    # Add Description column for recommended KPIs
+    _table_head(
+        ["2fr","2.5fr","1fr","1fr","0.8fr","1.6fr"],
+        ["KPI Name","Description","Owner/ SME","Target Value","Status","Actions"]
+    )
     updated = []
     for i, r in df.iterrows():
-        c1, c2, c3, c4, c5 = st.columns([2,1,1,0.8,1.6])
-        with c1: st.markdown(f"<div class='cell'><b>{r['KPI Name']}</b></div>", unsafe_allow_html=True)
-        with c2: owner_val = st.text_input("", value=r["Owner/ SME"], key=f"{key_prefix}_owner_{i}")
-        with c3: target_val = st.text_input("", value=r["Target Value"], key=f"{key_prefix}_target_{i}")
-        with c4: st.markdown(f"<div class='cell'>{_status_badge(r['Status'])}</div>", unsafe_allow_html=True)
-        with c5:
+        c1, c2, c3, c4, c5, c6 = st.columns([2,2.5,1,1,0.8,1.6])
+        with c1: kpi_name = st.text_input("", value=r["KPI Name"], key=f"{key_prefix}_name_{i}")
+        with c2: desc_val = st.text_input("", value=r.get("Description",""), key=f"{key_prefix}_desc_{i}")
+        with c3: owner_val = st.text_input("", value=r.get("Owner/ SME",""), key=f"{key_prefix}_owner_{i}")
+        with c4: target_val = st.text_input("", value=r.get("Target Value",""), key=f"{key_prefix}_target_{i}")
+        with c5: st.markdown(f"<div class='cell'>{_status_badge(r['Status'])}</div>", unsafe_allow_html=True)
+        with c6:
             colB, colC = st.columns([1,1])
             if colB.button("Validate", key=f"{key_prefix}_ok_{i}"):
                 r["Status"] = "Validated"
                 _upsert_final(brd, {
                     "BRD": brd,
-                    "KPI Name": r["KPI Name"],
+                    "KPI Name": kpi_name,
                     "Source": "Recommended",
-                    "Description": "",
+                    "Description": desc_val,
                     "Owner/ SME": owner_val,
                     "Target Value": target_val
                 })
             if colC.button("Reject", key=f"{key_prefix}_rej_{i}"):
                 r["Status"] = "Rejected"
-                _remove_from_final(brd, r["KPI Name"])
+                _remove_from_final(brd, kpi_name)
             st.markdown(_action_pill(r["Status"]), unsafe_allow_html=True)
-        updated.append({"KPI Name": r["KPI Name"], "Owner/ SME": owner_val, "Target Value": target_val, "Status": r["Status"]})
+
+        updated.append({
+            "KPI Name": kpi_name,
+            "Description": desc_val,
+            "Owner/ SME": owner_val,
+            "Target Value": target_val,
+            "Status": r["Status"]
+        })
     _table_tail()
     return pd.DataFrame(updated, columns=list(df.columns))
 
-# ---------- NEW: Manual KPI adder (Recommended section) ----------
+# ---------- Manual KPI adder (Recommended section) ----------
 def manual_kpi_adder(brd):
     """Inline form to manually add a KPI into the Recommended table for this BRD."""
     st.markdown("#### Add KPI manually")
     with st.form(key=f"manual_add_{brd}", clear_on_submit=True):
-        c1, c2, c3 = st.columns([2,1,1])
+        c1, c2 = st.columns([2,2])
         kpi_name = c1.text_input("KPI Name *", value="")
-        owner    = c2.text_input("Owner/ SME", value="")
-        target   = c3.text_input("Target Value", value="")
+        desc     = c2.text_input("Description", value="")
+        c3, c4 = st.columns([1,1])
+        owner    = c3.text_input("Owner/ SME", value="")
+        target   = c4.text_input("Target Value", value="")
         add = st.form_submit_button("Add KPI")
     if add:
         if not kpi_name.strip():
             st.warning("Please enter a KPI Name.")
             return
         rec_df = st.session_state["projects"][brd]["recommended"]
-        # dedupe (case-insensitive) across recommended & extracted
+        # dedupe across recommended & extracted (case-insensitive)
         all_existing = set([x.lower() for x in rec_df["KPI Name"].astype(str).tolist()])
         ext_df = st.session_state["projects"][brd]["extracted"]
         all_existing |= set([x.lower() for x in ext_df["KPI Name"].astype(str).tolist()])
         if kpi_name.strip().lower() in all_existing:
             st.warning("That KPI already exists in this BRD.")
             return
-        new_row = {"KPI Name": kpi_name.strip(), "Owner/ SME": owner.strip(), "Target Value": target.strip(), "Status": "Pending"}
+        new_row = {
+            "KPI Name": kpi_name.strip(),
+            "Description": desc.strip(),
+            "Owner/ SME": owner.strip(),
+            "Target Value": target.strip(),
+            "Status": "Pending"
+        }
         rec_df = pd.concat([rec_df, pd.DataFrame([new_row])], ignore_index=True)
         st.session_state["projects"][brd]["recommended"] = rec_df
         st.success("KPI added to Recommended.")
+        st.rerun()  # show it immediately
 
 # ---------- Pipeline per file ----------
 def process_file(file):
@@ -486,8 +510,8 @@ def process_file(file):
     existing = extracted["KPI Name"].astype(str).tolist() if not extracted.empty else []
     recs = recommend(domain, existing, topic=topic, raw_text=text)
     recommended = pd.DataFrame(
-        [{"KPI Name": r, "Owner/ SME": "", "Target Value": "", "Status": "Pending"} for r in recs],
-        columns=["KPI Name", "Owner/ SME", "Target Value", "Status"]
+        [{"KPI Name": r, "Description": "", "Owner/ SME": "", "Target Value": "", "Status": "Pending"} for r in recs],
+        columns=["KPI Name", "Description", "Owner/ SME", "Target Value", "Status"]
     )
 
     st.session_state["projects"][file.name] = {
@@ -520,10 +544,9 @@ for fname, proj in st.session_state["projects"].items():
     proj["extracted"] = render_extracted_table(fname, proj["extracted"], key_prefix=f"ext_{fname}")
 
     st.subheader("Recommended KPIs")
-    proj["recommended"] = render_recommended_table(fname, proj["recommended"], key_prefix=f"rec_{fname}")
-
-    # NEW: manual add panel
+    # show manual add first so new rows appear instantly
     manual_kpi_adder(fname)
+    proj["recommended"] = render_recommended_table(fname, proj["recommended"], key_prefix=f"rec_{fname}")
 
     st.markdown("<div class='kpi-header'>Finalized KPIs (This BRD)</div>", unsafe_allow_html=True)
     final_df = st.session_state["final_kpis"].get(fname, pd.DataFrame())
