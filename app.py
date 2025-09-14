@@ -9,7 +9,7 @@ import streamlit as st
 from pypdf import PdfReader
 from docx import Document as DocxDocument
 
-# ---------- Optional OCR fallback ----------
+# ---- Optional OCR fallback (safe to ignore if not installed) ----
 try:
     from pdf2image import convert_from_bytes
     import pytesseract
@@ -18,10 +18,9 @@ try:
 except Exception:
     OCR_AVAILABLE = False
 
-# ---------- LLM toggle & setup ----------
+# ---- LLM setup (falls back to heuristics if no key) ----
 USE_OPENAI = True
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-
 if USE_OPENAI and not OPENAI_API_KEY:
     st.info("OPENAI_API_KEY not found. Running in heuristic mode.")
     USE_OPENAI = False
@@ -30,69 +29,67 @@ if USE_OPENAI:
     try:
         from openai import OpenAI
         client = OpenAI(api_key=OPENAI_API_KEY)
-        OPENAI_MODEL = "gpt-4o-mini"  # switch to "gpt-4.1" for higher quality if you want
+        OPENAI_MODEL = "gpt-4o-mini"
     except Exception:
         st.info("OpenAI SDK unavailable. Running in heuristic mode.")
         USE_OPENAI = False
 
-# ---------- Demo credentials ----------
-VALID_USERS = {
-    "admin@company.com": "password123",
-    "user@company.com": "welcome123"
-}
+# ---- Demo creds ----
+VALID_USERS = {"admin@company.com": "password123", "user@company.com": "welcome123"}
 
-# ---------- Page setup ----------
+# ---- Page config ----
 st.set_page_config(page_title="AI KPI System", layout="wide")
 
-# ---------- Styles ----------
+# ---- Styles ----
 st.markdown(
     """
     <style>
     :root { --brand:#b91c1c; --green:#16a34a; --red:#b91c1c; }
     body, .stApp { background:#ffffff !important; }
 
-    /* ---------- LOGIN OVERLAY (fixes "misplaced") ---------- */
+    /* ---------- LOGIN OVERLAY ---------- */
     .login-overlay {
       position: fixed; inset: 0; z-index: 9999;
       background: #ffffff;
       display: grid; place-items: center;
-      padding: 2rem;  /* breathing room on tiny screens */
+      padding: 1.5rem;
     }
     .login-card {
-      width: 420px; max-width: 92vw;
+      width: 420px; max-width: 94vw;
       background:#fff; border:2px solid var(--brand);
-      border-radius:12px; padding:2rem;
-      box-shadow:0 4px 12px rgba(0,0,0,.05);
+      border-radius:12px; padding: 1.75rem 1.5rem;
+      box-shadow:0 6px 16px rgba(0,0,0,.06);
     }
-    .app-title { color:var(--brand); text-align:center; font-weight:800; font-size:2.2rem; margin:0 0 1rem 0; }
-    .login-card .help { color:#6b7280; margin-bottom:1rem; text-align:center; }
+    .login-title { color:var(--brand); text-align:center; font-weight:800; font-size:2rem; margin:0 0 .75rem 0; }
+    .login-sub { color:#6b7280; text-align:center; margin-bottom:1rem; }
 
-    /* Fields with solid red border (no focus highlight changes) */
+    /* Labels & inputs inside the login card only */
+    .login-card .stTextInput label,
+    .login-card .stPasswordInput label { font-weight:600; color:var(--brand); }
+
     .login-card .stTextInput > div > div,
     .login-card .stPasswordInput > div > div {
       border:1.6px solid var(--brand) !important;
-      border-radius:8px !important;
+      border-radius:10px !important;
       background:#fff !important;
       padding:0 !important;
       box-shadow:none !important;
     }
     .login-card input {
-      padding:10px 12px !important;
+      padding: 10px 12px !important;
       border:none !important; outline:none !important; box-shadow:none !important;
       width:100% !important; color:#111 !important;
     }
-    .login-card label { font-weight:600; color:var(--brand); }
 
-    /* Sign in button — centered, full width, red/white */
     .login-card .stButton > button {
       background:var(--brand) !important; color:#fff !important;
       border:1.6px solid var(--brand) !important; border-radius:10px !important;
       font-weight:700 !important; padding:.65rem 1.2rem !important;
-      width:100% !important; margin-top:.75rem;
+      width:100% !important; margin-top:.5rem;
     }
     .login-card .stButton > button:hover { filter:brightness(.95); }
 
-    /* ---------- APP CHROME AFTER LOGIN ---------- */
+    /* ---------- APP UI AFTER LOGIN ---------- */
     .topbar { position:sticky; top:0; z-index:5; background:#fff; padding:6px 0 8px; border-bottom:1px solid #eee; margin-bottom:8px; }
     .topbar-inner { display:flex; justify-content:space-between; align-items:center; }
     .who { color:#6b7280; font-size:14px; }
@@ -123,17 +120,17 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# ---------- Session defaults ----------
+# ---- Session defaults ----
 if "auth" not in st.session_state: st.session_state["auth"] = False
 if "user" not in st.session_state: st.session_state["user"] = None
 if "projects" not in st.session_state: st.session_state["projects"] = {}
 if "final_kpis" not in st.session_state: st.session_state["final_kpis"] = {}
 
-# ---------- Auth ----------
+# ---- Auth ----
 def _check_credentials(email: str, password: str) -> bool:
     return email.strip().lower() in VALID_USERS and VALID_USERS[email.strip().lower()] == password
 
-# ---------- File reading ----------
+# ---- File reading ----
 def read_text_from_bytes(data: bytes, name: str) -> str:
     bio = io.BytesIO(data)
     lname = name.lower()
@@ -175,7 +172,7 @@ def read_text_from_bytes(data: bytes, name: str) -> str:
 def read_uploaded(file) -> str:
     return read_text_from_bytes(file.read(), file.name)
 
-# ---------- Heuristic fallback ----------
+# ---- Heuristic fallback (used if LLM not available) ----
 def detect_hr_subdomain_heuristic(text: str) -> str:
     low = text.lower()
     if any(k in low for k in ["attrition", "retention", "predictive model", "risk score"]): return "hr_attrition_model"
@@ -219,7 +216,7 @@ def recommend_heuristic(existing_names: list[str], raw_text: str) -> list[dict]:
             out.append({"KPI Name":name, "Description":desc, "Owner/ SME":"", "Target Value":"", "Status":"Pending"})
     return out
 
-# ---------- LLM prompts/helpers ----------
+# ---- LLM helpers ----
 CLASSIFY_SYS_PROMPT = "Classify the HR BRD into one of: hr_attrition_model, hr_jd_system, hr_ats. Return ONLY JSON: {\"subdomain\": \"<one>\"}."
 EXTRACT_SYS_PROMPT = (
     "Extract 3-6 KPIs from the BRD. Return JSON: {\"kpis\": [{\"KPI Name\": str, \"Description\": str, \"Target Value\": str}]}. "
@@ -280,7 +277,7 @@ def recommend_llm(existing: list[str], subdomain: str, text: str) -> list[dict]:
     if not out: return recommend_heuristic(existing, raw_text=text)
     return out[:6]
 
-# ---------- Finalized helpers ----------
+# ---- Finalized helpers ----
 def _chip(status: str) -> str:
     cls = "chip-pending"
     if status == "Validated": cls = "chip-ok"
@@ -303,7 +300,7 @@ def _remove_from_final(brd, name):
         df = df[df["KPI Name"] != name].reset_index(drop=True)
     st.session_state["final_kpis"][brd] = df
 
-# ---------- Table helpers ----------
+# ---- Table helpers ----
 def _table_head(cols, headers):
     st.markdown(
         f"<div class='th-row' style='grid-template-columns:{cols};'>" +
@@ -423,7 +420,7 @@ def manual_kpi_adder(brd):
         st.session_state["projects"][brd]["recommended"] = rec_df
         st.success("KPI added to Recommended."); st.rerun()
 
-# ---------- Pipeline ----------
+# ---- Process pipeline ----
 def process_file(file):
     text = read_uploaded(file)
     if USE_OPENAI:
@@ -441,28 +438,32 @@ def process_file(file):
         file.name, pd.DataFrame(columns=["BRD","KPI Name","Source","Description","Owner/ SME","Target Value"])
     )
 
-# ---------- Login ----------
+# ---- Login (overlay) ----
 def login_page():
     st.markdown("<div class='login-overlay'><div class='login-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='app-title'>AI KPI System</div>", unsafe_allow_html=True)
-    st.markdown("<div class='help'>Sign in to continue</div>", unsafe_allow_html=True)
-    email = st.text_input("Email")
-    password = st.text_input("Password", type="password")
-    if st.button("Sign in"):
-        if _check_credentials(email, password):
-            st.session_state["auth"] = True
-            st.session_state["user"] = email.strip().lower()
-            st.rerun()
-        else:
-            st.error("Invalid email or password")
+
+    with st.form("login_form", clear_on_submit=False):
+        st.markdown("<div class='login-title'>AI KPI System</div>", unsafe_allow_html=True)
+        st.markdown("<div class='login-sub'>Sign in to continue</div>", unsafe_allow_html=True)
+        email = st.text_input("Email", key="login_email")
+        password = st.text_input("Password", type="password", key="login_password")
+        submitted = st.form_submit_button("Sign in")
+
+        if submitted:
+            if _check_credentials(email, password):
+                st.session_state["auth"] = True
+                st.session_state["user"] = email.strip().lower()
+                st.rerun()
+            else:
+                st.error("Invalid email or password")
+
     st.markdown("</div></div>", unsafe_allow_html=True)
 
-# ===================== MAIN =====================
+# ===== MAIN =====
 if not st.session_state["auth"]:
     login_page()
     st.stop()
 
-# Top bar after login
 st.markdown(
     "<div class='topbar'><div class='topbar-inner'>"
     f"<div class='who'>Signed in as <b>{st.session_state.get('user','')}</b></div>"
@@ -481,7 +482,6 @@ if st.button("Process BRDs"):
             process_file(f)
         st.success(f"✅ Processed {len(uploads)} BRD(s) successfully")
 
-# Show per BRD
 for fname, proj in st.session_state.projects.items():
     st.markdown(f"## 📄 {fname}")
     st.caption(f"Detected subdomain: **{proj.get('domain','hr_attrition_model').replace('_',' ').title()}**")
@@ -501,8 +501,8 @@ for fname, proj in st.session_state.projects.items():
         show = final_df[["KPI Name","Source","Owner/ SME","Target Value","Description"]].sort_values("KPI Name")
         st.dataframe(show, use_container_width=True, hide_index=True)
 
-        csp1, csp2, csp3 = st.columns([1,2,1])
-        with csp2:
+        _, c2, _ = st.columns([1,2,1])
+        with c2:
             st.markdown("<div class='centered accept-btn'>", unsafe_allow_html=True)
             if st.button("Review & Accept", key=f"accept_{fname}"):
                 st.success("✅ Finalized KPIs have been accepted successfully!")
