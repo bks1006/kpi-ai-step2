@@ -23,11 +23,30 @@ VALID_USERS = {
 # ---------- Page setup ----------
 st.set_page_config(page_title="AI KPI System", layout="wide")
 
-# ---------- Styles (red/white theme; fixed top bar; colored action buttons) ----------
+# ---------- Styles ----------
 st.markdown(
     """
     <style>
     :root { --brand:#b91c1c; --green:#16a34a; --red:#b91c1c; }
+    .block-container { padding-top: 1.0rem; }
+
+    /* Fixed top bar */
+    .topbar {
+      position: sticky; top: 0; z-index: 5;
+      background: white; padding: 6px 0 8px 0; margin-bottom: 4px;
+      border-bottom: 1px solid #eee;
+    }
+    .topbar-inner { display:flex; justify-content:space-between; align-items:center; }
+    .who { color:#6b7280; font-size:14px; }
+
+    /* Section tables */
+    .th-row {
+      background:#f3f4f6; border:1px solid #e5e7eb; border-bottom:0;
+      padding:10px 12px; border-radius:10px 10px 0 0; font-weight:700;
+      display:grid;
+    }
+    .tb { border:1px solid #e5e7eb; border-top:0; border-radius:0 0 10px 10px; }
+    .cell { padding:10px 12px; border-top:1px solid #e5e7eb; }
 
     /* Status chips */
     .chip { display:inline-block; padding:4px 10px; border-radius:999px; color:#fff; font-size:12px;}
@@ -35,20 +54,26 @@ st.markdown(
     .chip-ok{ background:#16a34a;}
     .chip-bad{ background:#b91c1c;}
 
-    /* Input borders */
+    /* Input borders (brand red) */
     .stTextInput > div > div > input,
     .stTextArea  > div > div > textarea,
     .stSelectbox > div > div > select {
-      border:1.6px solid var(--brand) !important;
-      border-radius:8px !important;
+      border:1.6px solid var(--brand) !important; border-radius:8px !important; background:#fff !important;
+      padding:6px 8px !important;
+    }
+    .stTextInput > div > div > input:focus,
+    .stTextArea  > div > div > textarea:focus,
+    .stSelectbox > div > div > select:focus {
+      border:2px solid var(--brand) !important; box-shadow:0 0 6px var(--brand) !important; outline:none !important;
     }
 
-    /* Highlight Validate/Reject AFTER click */
-    .btn-wrap.on-validate button { background:var(--green)!important; color:white!important; }
-    .btn-wrap.on-reject   button { background:var(--red)!important; color:white!important; }
+    /* Validate/Reject highlight AFTER action */
+    .btn-wrap.on-validate button { background:var(--green)!important; color:#fff!important; }
+    .btn-wrap.on-reject   button { background:var(--red)!important;   color:#fff!important; }
+    .btn-wrap button:hover { filter:brightness(0.96); }
 
-    /* Special rule ONLY for Review & Accept */
-    div[data-testid="stButton"][id*="accept"] > button {
+    /* Only Review & Accept should be red */
+    .accept-btn button {
         background-color: var(--brand) !important;
         color: white !important;
         border: none !important;
@@ -56,9 +81,9 @@ st.markdown(
         padding: 0.6rem 1.2rem !important;
         font-weight: 600 !important;
     }
-    div[data-testid="stButton"][id*="accept"] > button:hover {
-        filter: brightness(0.9);
-    }
+    .accept-btn button:hover { filter: brightness(0.9); }
+
+    .centered { display:flex; justify-content:center; }
     </style>
     """,
     unsafe_allow_html=True
@@ -322,7 +347,7 @@ def process_file(file):
         file.name, pd.DataFrame(columns=["BRD","KPI Name","Source","Description","Owner/ SME","Target Value"])
     )
 
-# ---------- Login (centered) ----------
+# ---------- Login ----------
 def render_login():
     st.markdown("<h2 style='color:#b91c1c;text-align:center'>AI KPI System</h2>", unsafe_allow_html=True)
     col = st.columns([1,2,1])[1]
@@ -345,14 +370,12 @@ if not st.session_state["auth"]:
     render_login()
     st.stop()
 
-# --- Top bar with logout on the right ---
+# --- Top bar ---
 st.markdown("<div class='topbar'><div class='topbar-inner'>"
             f"<div class='who'>Signed in as <b>{st.session_state.get('user','')}</b></div>"
             "</div></div>",
             unsafe_allow_html=True)
 top_c1, top_c2, top_c3 = st.columns([9,1,1])
-with top_c2:
-    pass
 with top_c3:
     if st.button("Log out"):
         for k in ["auth", "user", "projects", "final_kpis"]:
@@ -391,11 +414,10 @@ for fname, proj in st.session_state.projects.items():
         show = final_df[["KPI Name","Source","Owner/ SME","Target Value","Description"]].sort_values("KPI Name")
         st.dataframe(show, use_container_width=True, hide_index=True)
 
-        # --- Centered red "Review & Accept" button (forced red by CSS) ---
+        # --- Centered red "Review & Accept" button (scoped styling) ---
         csp1, csp2, csp3 = st.columns([1,2,1])
         with csp2:
-            st.markdown("<div class='centered'>", unsafe_allow_html=True)
+            st.markdown("<div class='centered accept-btn'>", unsafe_allow_html=True)
             if st.button("Review & Accept", key=f"accept_{fname}"):
                 st.success("✅ Finalized KPIs have been accepted successfully!")
             st.markdown("</div>", unsafe_allow_html=True)
-
