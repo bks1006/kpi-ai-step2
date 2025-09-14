@@ -9,8 +9,18 @@ import streamlit as st
 
 from pypdf import PdfReader
 from docx import Document as DocxDocument
+import os
 from openai import OpenAI
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # pulls the secret from Streamlit Cloud
+
+if not OPENAI_API_KEY:
+    # You can also hardcode a fallback here for local testing (not recommended in production)
+    # OPENAI_API_KEY = "sk-..."
+    pass
+
 client = OpenAI(api_key=OPENAI_API_KEY)
+
 
 
 # ---------- OCR fallback ----------
@@ -627,5 +637,6 @@ for fname, proj in st.session_state.projects.items():
             if st.button("Review & Accept", key=f"accept_{fname}"):
                 st.success("✅ Finalized KPIs have been accepted successfully!")
             st.markdown("</div>", unsafe_allow_html=True)
+
 
 
