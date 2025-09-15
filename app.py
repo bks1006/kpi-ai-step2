@@ -502,7 +502,7 @@ def login_page():
 if not st.session_state["auth"]:
     login_page(); st.stop()
 
-st.title("AI KPI Extraction & Recommendations (LLM-first)")
+st.title("AI KPI Extraction & Recommendations System")
 
 uploads = st.file_uploader("Upload BRDs", type=["pdf","docx","txt"], accept_multiple_files=True)
 
@@ -546,3 +546,4 @@ for fname, proj in st.session_state.projects.items():
 
     st.subheader("Finalized KPIs")
     render_finalized_table(fname)
+
